@@ -28,7 +28,7 @@
 
 // Core function: Is there a star in this grid cell?
 // If so, return its data. If not, return 0 brightness.
-vec3 getStarInCell(int faceIdx, vec2 cellID, vec3 viewDir, float pixelScale)
+vec3 getStarInCell_old(int faceIdx, vec2 cellID, vec3 viewDir, float pixelScale)
 {
     // 1. Deterministic Seed for this cell
     vec3 cellHashSeed = vec3(cellID, faceIdx);
@@ -72,6 +72,83 @@ vec3 getStarInCell(int faceIdx, vec2 cellID, vec3 viewDir, float pixelScale)
     return vec3(intensity);
 }
 
+bool getStarInCell(int faceIdx, vec2 cellID, out Star star)
+{
+    // 1. Deterministic Seed
+    vec3 cellHashSeed = vec3(cellID, faceIdx);
+    vec3 rng = hash33(cellHashSeed);
+    
+    // 2. Probability Check
+    if (rng.x > STAR_PROBABILITY) return false;
+    
+    // 3. Generate Properties
+    // Unique ID for consistency
+    star.id = rng.x + rng.y + float(faceIdx); 
+
+    // Position: Jitter within cell
+    vec2 cellUV = (cellID + 0.1 + 0.8 * rng.yz) / STAR_GRID_SCALE;
+    CubeMapFace face = initCubeMapFace(faceIdx, cellUV);
+    star.direction = getDirFromCubemap(face);
+    
+    // Magnitude: Exponential distribution
+    float magRng = fract(rng.x * 123.45);
+    star.magnitude = mix(STAR_MAGNITUDE_MIN, STAR_MAGNITUDE_MAX, magRng * magRng);
+    
+    // Temperature: Random distribution (2000K to 12000K)
+    // We skew slightly towards cooler (red/yellow) stars as they are more common, 
+    // but blue stars are brighter.
+    float tempRng = fract(rng.y * 456.78);
+    star.tempKelvin = mix(2000.0, STAR_COLOR_KELVIN_MAX, tempRng);
+    
+    // Pre-calculate Radiance (Energy)
+    star.radiance = vec3(magnitudeToRadiance(star.magnitude));
+    
+    return true;
+}
+
+vec3 renderStar(Star star, vec3 viewDir, float pixelScale)
+{
+    // 1. Angle Calculation
+    // For small angles, the length of the cross product is sin(theta) ~ theta.
+    // This is numerically stable and faster than acos(dot).
+    vec3 cp = cross(viewDir, star.direction);
+    float angleRadians = length(cp);
+    
+    // Optimization: Coarse culling
+    // If the star is further than, say, 10 pixels away, don't compute exp().
+    // We use the pixel scale to determine this threshold.
+    float cullAngle = pixelScale * STAR_PSF_CUTOFF_PIXELS;
+    if (angleRadians > cullAngle) return BLACK;
+    
+    // 2. Screen Space Conversion (The M5 Key)
+    // How many pixels away is the star center from the current pixel center?
+    float rPixels = angleRadians / pixelScale;
+    
+    // 3. Point Spread Function (Gaussian)
+    // I = I_0 * exp( -r^2 / (2 * sigma^2) )
+    // sigma is the "width" of the star in pixels.
+    float sigma = STAR_PSF_SIGMA_PIXELS; 
+    
+    // We allow very bright stars to bleed slightly more (simulating glare/bloom "pre-pass")
+    // by modifying sigma slightly based on brightness, or just keeping it pure.
+    // Let's keep it pure for M5:
+    float falloff = exp(-(rPixels * rPixels) / (2.0 * sigma * sigma));
+    
+    // We multiply by a smooth envelope that goes from 1.0 to 0.0 
+    // as we approach the cull radius.
+    // This prevents the "pop" when a star enters/exits the search radius.
+    float edgeFade = smoothstep(1.0, 0.0, rPixels / STAR_PSF_CUTOFF_PIXELS);
+    
+    // 4. Color Calculation
+    vec3 starColor = blackbodyToColor(star.tempKelvin);
+    
+    // 5. Final Radiance
+    // We multiply the star's total energy by the PSF falloff.
+    // Note: Technically, the integral of the PSF should normalize to 1.
+    // But since we are tuning artistically, we just multiply.
+    return star.radiance * starColor * falloff * edgeFade;
+}
+
 // Iterate through the grid to find stars near the current pixel ray
 vec3 evalStars(vec3 dirCelestial, float pixelScale) {
     
@@ -107,7 +184,17 @@ vec3 evalStars(vec3 dirCelestial, float pixelScale) {
             // This is acceptable for M4.
             
             // Check star in this neighbor cell
-            totalRadiance += getStarInCell(cubeMapFace.id, neighborID, dirCelestial, pixelScale);
+            //totalRadiance += getStarInCell(cubeMapFace.id, neighborID, dirCelestial, pixelScale);
+            
+            // Get Star Data
+            Star star;
+            bool exists = getStarInCell(cubeMapFace.id, neighborID, star);
+            
+            if (exists)
+            {
+                // Render Star with PSF
+                totalRadiance += renderStar(star, dirCelestial, pixelScale);
+            }
         }
     }
     
@@ -138,7 +225,19 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord)
     // 2. Apply Celestial Rotation (M2) to get Celestial Ray
     // The stars are fixed to the Celestial Sphere, which rotates.
     vec3 dirCelestial = getCelestialRay(dirWorld, getTimeSeconds(iTime));
-
+    
+    // --- CORRECTION START ---
+    // Fix Rectilinear Stretching at wide FOVs.
+    // We calculate how far "off-center" this pixel is using the dot product.
+    // forward dot dir = 1.0 at center, < 1.0 at edges.
+    float cosTheta = dot(dirWorld, camera.orientation.forward);
+    
+    // We tighten the scale by cos^2 to counteract the tan^2 projection stretching.
+    // This tricks the PSF into thinking pixels at the edge are "worth" more angle,
+    // keeping the star size constant in screen space.
+    camera.pixelScale *= (cosTheta * cosTheta);
+    // --- CORRECTION END ---
+    
     // 3. Evaluate Stars
     vec3 starRadiance = evalStars(dirCelestial, camera.pixelScale);
     

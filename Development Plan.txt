@@ -161,7 +161,7 @@ M4: Starfield Generator (deterministic) + Magnitude Distribution
 M5: Star PSF (Point Spread Function) in screen-space + Color model
 M6: Atmospheric Attenuation (extinction) + Twinkle (scintillation) stable per-star
 M7: Milky Way (procedural band) MVP
-M8: Milky Way realism upgrade (optional texture map path OR better procedural)
+M8: Great Rift and Nebulae (realism upgrade - optional texture map path OR better procedural)
 M9: Post (bloom / glare) + Exposure + Tonemap + Dither
 M10: Polish + Performance pass + Debug views + Quality tiers
 
@@ -402,6 +402,10 @@ B) Twinkle / Scintillation (stable per-star)
 - amplitude higher near horizon, lower at zenith.
 - IMPORTANT: twinkle uses starID, NOT screen noise.
 
+C) Star Structure Realism
+- ensure (or make) star density/grid relative to screen resolution
+- set star values to get realistic star density and distribution of brightness and colors
+
 Verification tests:
 - Toggle twinkle on/off:
     must not create a shimmering noise field; only stars fluctuate slightly.
@@ -451,7 +455,7 @@ Frame of reference:
 - Milky Way is often barely visible; avoid making it a bright painted stripe.
 
 ===============================================================================
-M8) MILKY WAY REALISM UPGRADE (OPTIONAL PATHS)
+M8) GREAT RIFT AND NEBULAE (REALISM UPGRADE - OPTIONAL PATHS)
 ===============================================================================
 
 Choose ONE upgrade path (based on your "fast > accurate" goal):

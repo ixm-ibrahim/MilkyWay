@@ -89,7 +89,7 @@ const vec3 DIM_BLUE   = vec3(0.05, 0.05, 0.25);
 --------------------------------------------*/
 
 #define SKY_ROTATION_AXIS  AXIS_UP
-#define SKY_ROTATION_SPEED 0.1 // radians per second
+#define SKY_ROTATION_SPEED 0.01 // radians per second
 
 /*------------------------------------------
                    3. SKY
@@ -104,7 +104,7 @@ const vec3 DIM_BLUE   = vec3(0.05, 0.05, 0.25);
 
 #define STAR_GRID_USE_ADJUSTMENT 1
 
-#define STAR_GRID_SCALE          15.0 // Higher = smaller cells, more potential stars
+#define STAR_GRID_SCALE          150.0 // Higher = smaller cells, more potential stars
 #define STAR_PROBABILITY         0.15 // Chance a cell contains a star
 
 #define STAR_ADJACENT_NEIGHBORS  1
@@ -113,8 +113,10 @@ const vec3 DIM_BLUE   = vec3(0.05, 0.05, 0.25);
 #define STAR_MAGNITUDE_MIN       -1.0 // Siriusish
 #define STAR_MAGNITUDE_MAX       6.0  // Dim limit
 
-#define STAR_PSF_SIGMA_PIXELS    0.65
-#define STAR_PSF_CUTOFF_PIXELS   3:contentReference[oaicite:5]{index=5}_MIN        2500.0
+#define STAR_PSF_SIGMA_PIXELS    0.65 // Gaussian sigma in pixels (visual tuning knob)
+#define STAR_PSF_CUTOFF_PIXELS   3.0  // Stop evaluating beyond this radius (perf)
+
+#define STAR_COLOR_KELVIN_MIN    2500.0
 #define STAR_COLOR_KELVIN_MAX    12000.0
 
 
@@ -154,6 +156,15 @@ struct CubeMapFace
 {
     int id;
     vec2 uv;
+};
+
+struct Star
+{
+    float id;           // Unique value (hash seed) to identify this star
+    vec3  direction;    // Celestial direction (unit vector)
+    float magnitude;    // Brightness (logarithmic)
+    float tempKelvin;   // Color temperature
+    vec3  radiance;     // Pre-calculated base energy (white)
 };
 
 //==================================================================
@@ -252,6 +263,42 @@ float magnitudeToRadiance(float mag)
     
     // I = I_0 * 10^(-0.4 * mag)
     return pow(10.0, -0.4 * mag);
+}
+
+vec3 blackbodyToColor(float kelvin)
+{
+    float t = kelvin / 100.0;
+    vec3 color = vec3(0.0);
+    
+    // Red
+    if (t <= 66.0) color.r = 255.0;
+    else
+    {
+        color.r = t - 60.0;
+        color.r = 329.698727446 * pow(color.r, -0.1332047592);
+    }
+    
+    // Green
+    if (t <= 66.0)
+    {
+        color.g = t;
+        color.g = 99.4708025861 * log(color.g) - 161.1195681661;
+    } else {
+        color.g = t - 60.0;
+        color.g = 288.1221695283 * pow(color.g, -0.0755148492);
+    }
+    
+    // Blue
+    if (t >= 66.0) color.b = 255.0;
+    else {
+        if (t <= 19.0) color.b = 0.0;
+        else {
+            color.b = t - 10.0;
+            color.b = 138.5177312231 * log(color.b) - 305.0447927307;
+        }
+    }
+    
+    return saturate(color / 255.0);
 }
 
 /*--------------------------------------
