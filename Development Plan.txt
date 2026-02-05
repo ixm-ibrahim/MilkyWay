@@ -1,0 +1,593 @@
+===============================================================================
+SHADERTOY DARK SKY / STARFIELD + MILKY WAY
+INCREMENTAL DEVELOPMENT PLAN (FAST > ACCURATE, REALISTIC-TO-EYE)
+All acronyms expanded at first use.
+===============================================================================
+
+GOAL SUMMARY (PLAIN ENGLISH)
+---------------------------
+You are building a realistic-looking night sky for Shadertoy that mimics what a
+human eye sees under very clear, high-altitude conditions:
+- A dark sky that is not pure black (subtle sky glow and horizon gradient).
+- Stars that look like true points of light: mostly pixel-sized, with a proper
+  Point Spread Function (PSF) so zooming does not inflate star size.
+- A believable Milky Way: a faint band with mottling, a brighter core, and
+  hints of dust lanes, without turning into a bright fog stripe.
+- Motion that feels correct: the sky rotates as a rigid body, and procedural
+  detail is stable in sky coordinates (no crawling shimmer when the camera moves).
+- Performance-first: choose approximations that preserve the look while keeping
+  the shader fast (for example, accept 90% realism if it saves 200% work).
+- Modular “lego” code: clean, self-documenting structure that is easy to extend
+  (e.g., adding a brighter star catalog later, or upgrading Milky Way detail).
+
+Legend
+------
+- "MVP" = Minimum Viable Product (smallest thing that looks right)
+- "HDR" = High Dynamic Range (lighting values above 0..1 before tonemapping)
+- "LDR" = Low Dynamic Range (final display 0..1 after tonemapping)
+- "PSF" = Point Spread Function (how a point of light spreads across pixels)
+- "FOV" = Field Of View (camera angle)
+- "RNG" = Random Number Generator (here: deterministic hashing)
+- "ID"  = Identifier (stable per-star key)
+- "GPU" = Graphics Processing Unit (the thing running your shader)
+- "ACES"= Academy Color Encoding System (a common filmic tonemap curve)
+- "AABB"= Axis-Aligned Bounding Box (rect for culling; we mostly avoid using it)
+- "UV"  = 2D texture coordinates (usually 0..1,0..1)
+- "SNR" = Signal-to-Noise Ratio (how clean vs noisy something looks)
+- "NaN" = Not a Number (invalid floating-point result; should be avoided)
+
+===============================================================================
+DEVELOPMENT PRINCIPLES (LEGOIFICATION + VERIFICATION)
+===============================================================================
+
+This project is built to be "lego-like": each piece is small, testable, and
+reusable. The plan below assumes you enforce these rules from the start.
+
+A) Legoification / "Object-like" GLSL structure
+-----------------------------------------------
+Even though GLSL (OpenGL Shading Language) is not object-oriented, you can
+simulate object-like modularity using:
+- "struct" blocks as modules (configuration + runtime state)
+- pure functions that operate on those structs
+- consistent naming and minimal shared global state
+
+Recommended pattern:
+- One struct per subsystem:
+    Camera, Frames (coordinate frames), StarParams, StarSample,
+    SkyParams, MilkyWayParams, PostParams, DebugParams
+- One "eval" function per subsystem:
+    evalSkyBackground(), evalStars(), evalMilkyWay(), evalBloom(), etc.
+- One "compose" function at the end:
+    composeHDR() -> tonemap -> output
+
+B) SOLID-like principles (adapted for shaders)
+----------------------------------------------
+- Single Responsibility:
+    Each function does one job (e.g., "magnitudeToRadiance" ONLY maps magnitude).
+- Open/Closed:
+    Add features by adding new modules, not by rewriting existing logic.
+- Liskov Substitution (practical shader version):
+    A "model" function should accept the same inputs and return the same type
+    so you can swap implementations (procedural Milky Way vs texture Milky Way).
+- Interface Segregation:
+    Keep function signatures small; avoid passing giant structs everywhere unless
+    it improves clarity. Prefer small typed parameter groups.
+- Dependency Inversion:
+    High-level composition calls lower-level modules; low-level modules should not
+    depend on high-level "Image" logic. (No circular dependencies.)
+
+C) Self-documenting code standards
+----------------------------------
+- Naming:
+    Prefer explicit names: "radiansPerPixel" over "px", "galacticNormal" over "n".
+- Units in names:
+    If relevant, include units: "theta2" (radians^2), "luminanceHDR".
+- Stable hashing:
+    All randomness must come from stable inputs (cell coords, star slot index).
+- Comments:
+    Keep comments short and meaningful, focusing on "why" and invariants.
+    Put a header comment before each function describing:
+      - purpose
+      - inputs/outputs (and units if relevant)
+      - assumptions / invariants
+      - performance notes (if any)
+
+D) Every step includes verification + frame of reference
+--------------------------------------------------------
+For EACH milestone:
+1) A visual debug view that isolates the new feature.
+2) A "freeze" mode:
+   - Freeze time or rotation so you can compare frames.
+3) A reference expectation:
+   - "This should look like X" with qualitative checks:
+       - "stars do not crawl"
+       - "zoom does not inflate PSF"
+       - "band is faint, core brighter"
+4) A failure checklist:
+   - If it fails, likely causes are listed (e.g., screen-space noise, unstable IDs).
+
+E) Practical performance discipline
+-----------------------------------
+- Avoid unbounded loops. Every per-pixel star evaluation should be constant-time.
+- Limit noise octaves. If you add detail, do it with the fewest layers possible.
+- Prefer dot products over trigonometry where possible.
+- Add "FAST / MED / HIGH" quality tiers early to keep iteration smooth.
+
+===============================================================================
+0) PASS LAYOUT (TARGET ARCHITECTURE)
+===============================================================================
+
+Common
+  - constants + toggles + structs
+  - math + hashing + color + tonemap utilities
+  - coordinate frames (world/celestial/galactic)
+  - camera + view ray + pixel angular scale helpers
+
+Buffer A  (Sky background) -> outputs HDR radiance
+Buffer B  (Stars)          -> outputs HDR radiance
+Buffer C  (Milky Way)      -> outputs HDR radiance
+Buffer D  (Post: bloom + exposure) -> optional, outputs HDR radiance
+Image     (Final composite + tonemap + debug)
+
+NOTE:
+- If you want fewer passes at first, start with Image only, then split later.
+- But this plan assumes Buffers from early-on, because iteration is easier.
+
+===============================================================================
+1) GLOBAL "DONE" CRITERIA (WHAT "SUCCESS" LOOKS LIKE)
+===============================================================================
+
+[Visual]
+- Night sky is not pure black (subtle sky floor)
+- Stars are mostly pixel-sized and do NOT inflate when you zoom (PSF is stable)
+- Star brightness distribution: few bright, many faint
+- Milky Way: visible band + brighter core + mottling (not a flat fog stripe)
+- Motion: panning camera doesn't cause crawling noise (temporal stability)
+
+[Technical]
+- Each feature is a self-contained module (lego)
+- Every random value is deterministic from stable inputs (no screen-space noise)
+- HDR pipeline: combine in linear HDR, tonemap at the end
+
+===============================================================================
+2) MILESTONES (IN ORDER)
+===============================================================================
+
+M0: Scaffolding + Debug Harness
+M1: Camera, View Ray, Pixel Angular Scale (zoom invariance foundation)
+M2: Celestial Rotation (rigid rotation of the sky)
+M3: Base Night Sky Background + Airglow (subtle)
+M4: Starfield Generator (deterministic) + Magnitude Distribution
+M5: Star PSF (Point Spread Function) in screen-space + Color model
+M6: Atmospheric Attenuation (extinction) + Twinkle (scintillation) stable per-star
+M7: Milky Way (procedural band) MVP
+M8: Milky Way realism upgrade (optional texture map path OR better procedural)
+M9: Post (bloom / glare) + Exposure + Tonemap + Dither
+M10: Polish + Performance pass + Debug views + Quality tiers
+
+===============================================================================
+M0) SCAFFOLDING + DEBUG HARNESS
+===============================================================================
+
+Goal:
+- A clean skeleton where every later step can be tested in isolation.
+
+Tasks:
+- Common:
+  [ ] Define toggles (compile-time or runtime):
+      SHOW_DEBUG, ENABLE_STARS, ENABLE_MILKYWAY, ENABLE_AIRGLOW, ENABLE_BLOOM, etc.
+  [ ] Define a small Debug enum:
+      DEBUG_OFF
+      DEBUG_VIEW_RAY
+      DEBUG_PIXEL_SCALE
+      DEBUG_STAR_ID
+      DEBUG_STAR_LUMINANCE
+      DEBUG_GALACTIC_PLANE_DISTANCE
+      DEBUG_MILKYWAY_MASK
+	  etc.
+  [ ] Add helper: debugColorRamp(float x)
+
+- Buffers:
+  [ ] Buffer A returns vec3(0) initially (black)
+  [ ] Buffer B returns vec3(0) initially (black)
+  [ ] Buffer C returns vec3(0) initially (black)
+  [ ] Buffer D returns input passthrough initially
+
+- Image:
+  [ ] Composite = A + B + C (+ D later)
+  [ ] Tonemap placeholder (simple clamp) for now:
+      ldr = clamp(hdr, 0, 1)
+  [ ] Debug switch:
+      if DEBUG_... then override output
+
+Verification:
+- Toggle each debug mode and confirm it changes output.
+- Ensure no uninitialized values and no NaNs (Not a Number).
+
+Frame of reference:
+- At this stage, it's okay to see only black; you are validating the scaffolding.
+
+===============================================================================
+M1) CAMERA + VIEW RAY + PIXEL ANGULAR SCALE
+===============================================================================
+
+Goal:
+- A correct view direction per pixel (dir) and a scalar that tells you
+  "how many radians per pixel" (angular pixel size) so star PSF stays stable.
+
+Definitions:
+- View Ray: the direction from camera through the pixel into the scene.
+- Pixel Angular Scale: approximate angle covered by one pixel; needed for PSF width.
+
+Tasks (Common):
+- Camera struct:
+  pos, target, up, fovY (vertical field of view)
+- Camera basis:
+  forward, right, up
+- getViewRay(uv) -> dir
+- getPixelAngularScale(fovY, resolutionY) -> radiansPerPixel
+  Example idea (conceptual):
+    radiansPerPixel ~ fovY / resolutionY
+  (This is good enough for star size stability in Shadertoy.)
+
+Image debug views:
+- DEBUG_VIEW_RAY:
+  show (dir * 0.5 + 0.5)
+- DEBUG_PIXEL_SCALE:
+  show grayscale of radiansPerPixel (should be constant per frame)
+
+Verification tests:
+- Change FOV (zoom): DEBUG_PIXEL_SCALE changes.
+- Pan camera: DEBUG_VIEW_RAY rotates smoothly.
+
+Frame of reference:
+- A correct ray view should look like a smooth color gradient over the screen.
+
+===============================================================================
+M2) CELESTIAL ROTATION (RIGID SKY MOTION)
+===============================================================================
+
+Goal:
+- The sky rotates as a rigid body over time (like Earth rotation), without
+  changing star relative positions.
+
+Definitions:
+- Rigid rotation: rotate direction vectors by a rotation matrix.
+- Celestial frame: the coordinate system where star distribution is defined.
+
+Tasks (Common):
+- rotationMatrix(axis, angle) -> mat3
+- Choose a sky rotation axis (world up, or custom)
+- In Image/Buffer:
+  dirCelestial = rotate(dirWorld)
+
+Verification tests:
+- Add a debug "marker" direction and render it as a bright dot.
+- Confirm the marker moves smoothly and does not deform when zoom changes.
+
+Frame of reference:
+- The whole sky should behave like a painted sphere rotating, not like procedural
+  noise sliding across the screen.
+
+===============================================================================
+M3) BASE NIGHT SKY BACKGROUND + AIRGLOW (SUBTLE)
+===============================================================================
+
+Goal:
+- A believable dark sky floor: not pitch black, slightly brighter near horizon.
+
+Definitions:
+- Airglow: faint emission in upper atmosphere; looks like subtle banding/gradient.
+
+Tasks (Buffer A):
+- Inputs: dirWorld (or dirCelestial; background can be world-based)
+- Compute altitude proxy:
+    altitudeFactor = clamp(dirWorld.y * 0.5 + 0.5, 0, 1)
+  (Assuming y is "up".)
+- Base sky floor:
+    sky = very small value (HDR), slightly darker at zenith, slightly brighter near horizon
+- Optional airglow:
+    airglow = faint band / gradient (keep extremely subtle)
+
+Verification tests:
+- Toggle sky background and airglow separately.
+- Ensure gradients remain stable when panning camera (no screen noise).
+- Color, shape, and structure of airglow should align with the color, shape, and structure
+  of reality's airglow (without sacrificing performance - should be the cheapest part of
+  the whole shader)
+
+Frame of reference:
+- A dark sky photo: "not black" but still very dark; avoid obvious colored haze.
+
+===============================================================================
+M4) STARFIELD GENERATOR (DETERMINISTIC) + MAGNITUDE DISTRIBUTION
+===============================================================================
+
+Goal:
+- Generate stars in constant time per pixel, stable in sky coordinates.
+- Most important realism: magnitude distribution (few bright, many faint).
+
+Definitions:
+- Magnitude (astronomy): logarithmic brightness measure; lower magnitude = brighter.
+- Deterministic hashing: "random" values derived from integer cell coordinates.
+
+Architecture choice (fast procedural):
+- Partition the celestial sphere into cells (e.g., cube-map faces or 3D grid hashing).
+- For each pixel direction, look up the cell(s) it belongs to, generate a small fixed
+  number of candidate stars, and accumulate those near the pixel direction.
+
+Tasks (Common):
+- hash functions: hash11, hash21, hash31 (deterministic floats 0..1)
+- A stable star ID from cell index + star slot index.
+
+Tasks (Buffer B):
+- For current dirCelestial:
+  [ ] Determine a "cell coordinate" (implementation-dependent).
+  [ ] For N candidate stars in this cell (N small like 1..4):
+      - Create star direction (unit vector) from hashed values
+      - Create star magnitude from distribution:
+          - Many faint (high magnitude), few bright (low magnitude)
+      - Store star color parameter (temperature seed)
+  [ ] Compute angular separation between pixel dir and star dir:
+      - Use dot product:
+          cosTheta = dot(dir, starDir)
+          smallAngle approx: theta^2 ~ 2*(1 - cosTheta)
+      - If too far, skip quickly.
+
+Verification tests:
+- Freeze time. Pan camera slowly:
+    stars should stay locked to the sky (no crawling or re-randomizing).
+- Toggle "draw candidate stars as solid dots" (no PSF yet):
+    confirm density and distribution.
+
+Frame of reference:
+- A realistic starfield: sparse bright stars, many faint stars, not uniform brightness.
+
+===============================================================================
+M5) STAR APPEARANCE: PSF + COLOR (HDR)
+===============================================================================
+
+Goal:
+- Stars render as a PSF in screen space, stable across zoom.
+- Bright stars have slightly stronger PSF, but not "big blobs".
+
+Definitions:
+- Point Spread Function (PSF): 2D profile, often Gaussian-like.
+- HDR radiance: star energy can exceed 1 before tonemap.
+
+Tasks (Buffer B):
+- Compute pixel angular scale = radiansPerPixel (from M1).
+- For each star:
+  [ ] Convert angular distance to "pixel distance":
+      rPixels^2 = theta^2 / (radiansPerPixel^2)
+  [ ] PSF core:
+      psf = exp(-rPixels^2 * k)   (k controls width)
+  [ ] Magnitude -> intensity:
+      intensity = magnitudeToRadiance(mag)  (relative scale)
+  [ ] Star color:
+      color = temperatureToRgb(tempSeed)
+  [ ] Accumulate:
+      starsHDR += intensity * psf * color
+
+Verification tests:
+- Zoom in/out by changing FOV:
+    star core should stay about the same pixel size (PSF stability).
+- Isolate one bright star:
+    confirm PSF looks like a smooth dot, not a square pixel pattern.
+
+Frame of reference:
+- Human perception: stars are points with tiny halos for the brightest ones.
+
+===============================================================================
+M6) ATMOSPHERIC ATTENUATION + TWINKLE (SCINTILLATION)
+===============================================================================
+
+Goal:
+- Mild realism: near-horizon stars dim a bit; twinkle exists but stable per star.
+
+Definitions:
+- Atmospheric extinction: dimming due to air mass (more atmosphere near horizon).
+- Scintillation (twinkle): rapid brightness fluctuation due to turbulence.
+
+Tasks:
+A) Extinction (fast approximation)
+- altitude = clamp(dirWorld.y, 0, 1)
+- airMassApprox = 1 / max(0.1, altitude)   (simple; clamp to avoid blow-up)
+- extinctionFactor = exp(-kExt * airMassApprox)
+- Apply to star intensity and Milky Way (slightly) based on altitude.
+
+B) Twinkle / Scintillation (stable per-star)
+- twinklePhase = hash(starID)
+- twinkle = 1 + amplitude(altitude) * sin(time * speed + twinklePhase)
+- amplitude higher near horizon, lower at zenith.
+- IMPORTANT: twinkle uses starID, NOT screen noise.
+
+Verification tests:
+- Toggle twinkle on/off:
+    must not create a shimmering noise field; only stars fluctuate slightly.
+- Slow time:
+    confirm each star has its own stable twinkle pattern.
+
+Frame of reference:
+- Real twinkle is subtle overhead and stronger near horizon.
+
+===============================================================================
+M7) MILKY WAY MVP (PROCEDURAL BAND)
+===============================================================================
+
+Goal:
+- Get a believable Milky Way band quickly without textures.
+
+Definitions:
+- Galactic plane: plane of the Milky Way disk in the sky.
+- Bulge/core: bright region near galactic center.
+
+Tasks (Buffer C):
+- Define galactic basis:
+  galacticNormal (plane normal)
+  galacticCenterDir (direction to core)
+  galacticAxis1/2 (in-plane basis vectors)
+
+- For dirCelestial:
+  [ ] planeDist = abs(dot(dirCelestial, galacticNormal))
+  [ ] bandMask = smoothstep(widthOuter, widthInner, planeDist)
+  [ ] coreMask = pow(max(0, dot(dirCelestial, galacticCenterDir)), corePower)
+  [ ] mottling noise (low frequency, stable in sky coords):
+      - Use a few octaves (small number!) of noise based on dirCelestial projected
+        onto galacticAxis1/2.
+  [ ] dust lanes (cheap):
+      - Subtract anisotropic noise aligned with the band (very subtle).
+
+- Color:
+  - base MW = faint neutral + slight warm in core
+  - keep faint: the Milky Way should not overpower starfield.
+
+Verification tests:
+- Toggle Milky Way on/off and confirm it composites cleanly with stars.
+- Pan camera:
+    band structure must stay fixed to the sky (no screen crawl).
+
+Frame of reference:
+- Milky Way is often barely visible; avoid making it a bright painted stripe.
+
+===============================================================================
+M8) MILKY WAY REALISM UPGRADE (OPTIONAL PATHS)
+===============================================================================
+
+Choose ONE upgrade path (based on your "fast > accurate" goal):
+
+PATH A (recommended): Texture map
+---------------------------------
+Goal:
+- Replace procedural guess with a precomputed galactic sky luminance map.
+
+Tasks:
+- Use a 2D texture (equirectangular or custom mapping).
+- Sample using galactic coordinates.
+- Use channels:
+  R: luminance/density
+  G: dust lane mask
+  B: emission tint factor
+- Blend with your procedural as fallback.
+
+Verification tests:
+- Compare procedural vs texture at same exposure:
+    texture path should add recognizable structure without extra noise shimmer.
+
+Frame of reference:
+- Real astrophotography projections: richer structure with less "procedural look".
+
+Pros:
+- Huge realism boost for cheap.
+Cons:
+- Requires external texture (Shadertoy channel).
+
+PATH B: Better procedural
+------------------------
+Goal:
+- Add structure: multiple arms hints + better dust lane modeling.
+
+Tasks:
+- Add large-scale gradients along the plane
+- Add multi-scale noise but limit octaves for performance
+- Add a few "cloud" blobs seeded deterministically
+
+Verification tests:
+- Ensure added detail does not create crawling or aliasing at different zoom levels.
+
+Frame of reference:
+- It should read as distant star clouds, not as noisy fog.
+
+Pros:
+- No external textures.
+Cons:
+- Harder to make "authentic" without overdoing it.
+
+===============================================================================
+M9) POST: BLOOM/GLARE + EXPOSURE + TONEMAP + DITHER
+===============================================================================
+
+Goal:
+- Make it look like eyes/camera optics: bright stars get subtle halos.
+- Convert HDR to display LDR gracefully.
+
+Definitions:
+- Bloom: bright areas blur and add glow.
+- Exposure: scalar multiplier controlling overall brightness.
+- Tonemap: curve compressing HDR into displayable range.
+- Dither: tiny noise to reduce color banding.
+
+Tasks (Buffer D):
+- Bloom:
+  - Threshold on luminance, blur with small multi-tap kernel (cheap)
+- Exposure:
+  - fixed user control (recommended first)
+- Tonemap:
+  - ACES (Academy Color Encoding System) or filmic curve
+- Gamma:
+  - convert to monitor space (approx 2.2)
+- Dither:
+  - add tiny hash-based noise before final quantization
+
+Verification tests:
+- View bloom-only:
+    halos should be subtle and limited to bright stars.
+- View pre-tonemap luminance heatmap:
+    confirm HDR has headroom (values > 1 exist).
+- Toggle tonemap curves:
+    confirm stars remain stars (not crushed or blown out).
+
+Frame of reference:
+- Bright stars often feel slightly "glowy" compared to faint ones.
+
+===============================================================================
+M10) POLISH + PERFORMANCE + QUALITY TIERS
+===============================================================================
+
+Goal:
+- Make it robust, fast, and easy to extend.
+
+Tasks:
+- Performance:
+  [ ] Minimize star candidates per pixel (measure!)
+  [ ] Reduce noise octaves for Milky Way
+  [ ] Avoid expensive operations in loops
+- Quality tiers:
+  FAST: fewer stars, fewer noise octaves, no bloom
+  MED: default
+  HIGH: more stars, mild bloom, better MW structure
+- Code hygiene:
+  [ ] Naming: clear, consistent
+  [ ] "Self-documenting": functions do one thing, inputs/outputs obvious
+  [ ] Comments only for "why", not "what"
+
+Verification tests:
+- Compare FAST vs HIGH:
+    same composition, just different richness and performance.
+- Pan + zoom stress test:
+    no temporal shimmer, no PSF inflation, no banding regressions.
+
+Frame of reference:
+- Final look should be coherent and stable; detail should feel "painted on the sky".
+
+===============================================================================
+3) WHAT YOU WILL HAVE AT EACH MILESTONE (QUICK EXPECTATIONS)
+===============================================================================
+
+M1: You can see view rays and confirm zoom behavior
+M3: You have a believable dark background (not black)
+M5: You have a stable starfield with correct size behavior
+M7: You have a Milky Way band that doesn't crawl or shimmer
+M9: You have "real to eyes" polish (glow + tonemap + dither)
+
+===============================================================================
+4) OPTIONAL "SCIENTIFIC REALISM" ADD-ONS (ONLY AFTER MVP)
+===============================================================================
+
+- Catalog stars: use a packed dataset for top 1000 brightest stars
+- Proper magnitude-to-radiance calibration
+- Color from stellar temperature with better blackbody approximation
+- Light pollution near horizon (if you ever want it)
+- Zodiacal light (sunlight scattered by interplanetary dust; subtle band)
+
+===============================================================================
