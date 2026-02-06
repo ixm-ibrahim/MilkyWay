@@ -44,59 +44,66 @@ const vec3 DIM_BLUE   = vec3(0.05, 0.05, 0.25);
                   0. DEBUG
 --------------------------------------------*/
 
-#define SHOW_DEBUG                    1
+#define SHOW_DEBUG                     1
 
-#define ENABLE_BUFFER_A               true  // background
-#define ENABLE_BUFFER_B               true  // stars
-#define ENABLE_BUFFER_C               true  // milky way
-#define ENABLE_BUFFER_D               true  // post-processing
+#define ENABLE_BUFFER_A                true  // background
+#define ENABLE_BUFFER_B                true  // stars
+#define ENABLE_BUFFER_C                true  // milky way
+#define ENABLE_BUFFER_D                true  // post-processing
 
-#define DEBUG_OFF                     0
-#define DEBUG_VIEW_RAY                1
-#define DEBUG_CAMERA_PAN              2
-#define DEBUG_PIXEL_SCALE             3
-#define DEBUG_CELESTIAL_ROTATION      4
-#define DEBUG_STAR_GRID               5
-#define DEBUG_STAR_ID                 6
-#define DEBUG_STAR_LUMINANCE          7
-#define DEBUG_GALACTIC_PLANE_DISTANCE 8
-#define DEBUG_MILKYWAY_MASK           9
+#define DEBUG_OFF                      0
+#define DEBUG_VIEW_RAY                 1
+#define DEBUG_CAMERA_PAN               2
+#define DEBUG_PIXEL_SCALE              3
+#define DEBUG_CELESTIAL_ROTATION       4
+#define DEBUG_STAR_GRID                5
+#define DEBUG_STAR_ID                  6
+#define DEBUG_STAR_LUMINANCE           7
+#define DEBUG_GALACTIC_PLANE_DISTANCE  8
+#define DEBUG_MILKYWAY_MASK            9
 
-#define DEBUG_MODE                    DEBUG_STAR_GRID
-#define DEBUG_USE_TEST_COLOR          false
+#define DEBUG_MODE                     DEBUG_OFF
+#define DEBUG_USE_TEST_COLOR           true
 
-#define DEBUG_ENABLE_FREEZE_TIME      false
-#define DEBUG_FROZEN_TIME_SECONDS     0.1
-#define DEBUG_TIME_SPEED_SCALE        1.0
+#define DEBUG_ENABLE_FREEZE_TIME       false
+#define DEBUG_FROZEN_TIME_SECONDS      0.1
+#define DEBUG_TIME_SPEED_SCALE         0.9
 
-#define ERROR_COLOR                   MAGENTA
+#define ERROR_COLOR                    MAGENTA
 
 
 /*------------------------------------------
                  1. CAMERA
 --------------------------------------------*/
 
-#define CAMERA_START_POSITION    ORIGIN
-#define CAMERA_START_TARGET      AXIS_FORWARD
-#define CAMERA_START_UP          AXIS_UP
+#define CAMERA_START_POSITION     ORIGIN
+#define CAMERA_START_TARGET       AXIS_FORWARD
+#define CAMERA_START_UP           AXIS_UP
 
-#define CAMERA_START_FOV_DEGREES 60.0
-#define CAMERA_MIN_FOV_DEGREES   10.0
-#define CAMERA_MAX_FOV_DEGREES   120.0
+#define CAMERA_START_FOV_DEGREES  60.0
+#define CAMERA_MIN_FOV_DEGREES    10.0
+#define CAMERA_MAX_FOV_DEGREES    120.0
 
 /*------------------------------------------
             2. CELESTIAL SPHERE
 --------------------------------------------*/
 
-#define SKY_ROTATION_AXIS  AXIS_UP
-#define SKY_ROTATION_SPEED 0.01 // radians per second
+#define CELESTIAL_SPHERE_ROTATION_AXIS   AXIS_UP
+#define CELESTIAL_SPHERE_ROTATION_SPEED  0.01 // radians per second
 
 /*------------------------------------------
                    3. SKY
 --------------------------------------------*/
 
-#define AIRGLOW_CENTER     0.15 // ~8.5 degrees above horizon
-#define AIRGLOW_BAND_WIDTH 15.0 // Controls how narrow the band is
+#define SKY_ZENITH_COLOR        vec3(0.002, 0.004, 0.010) // Deepest space blue
+#define SKY_HORIZON_COLOR       vec3(0.010, 0.025, 0.030) // Hazy teal near ground
+#define SKY_AIRGLOW_COLOR       vec3(0.010, 0.040, 0.030) // Faint green/teal emission
+
+#define SKY_AIRGLOW_CENTER      0.15 // ~8.5 degrees above horizon
+#define SKY_AIRGLOW_BAND_WIDTH  15.0 // Controls how narrow the band is
+
+#define SKY_COLOR_INTENSITY     0.25
+#define SKY_AIRGLOW_INTENSITY   0.15
 
 /*------------------------------------------
                   4. STARS
@@ -104,22 +111,33 @@ const vec3 DIM_BLUE   = vec3(0.05, 0.05, 0.25);
 
 #define STAR_GRID_USE_ADJUSTMENT 1
 
-#define STAR_GRID_SCALE          150.0 // Higher = smaller cells, more potential stars
-#define STAR_PROBABILITY         0.15 // Chance a cell contains a star
+#define STAR_GRID_SCALE                    500.0 // Higher = smaller cells, more potential stars
+#define STAR_PROBABILITY                   0.25
+#define STAR_ADJACENT_NEIGHBORS            1
 
-#define STAR_ADJACENT_NEIGHBORS  1
+#define STAR_BRIGHTNESS_MIN                -2.5 // Siriusish
+#define STAR_BRIGHTNESS_MAX                4.5  // Dim limit
+#define STAR_BRIGHTNESS_CURVE_ADJUST       0.25
 
-#define STAR_MAGNITUDE_BASE      1.0 
-#define STAR_MAGNITUDE_MIN       -1.0 // Siriusish
-#define STAR_MAGNITUDE_MAX       6.0  // Dim limit
+#define STAR_PSF_SIGMA_PIXELS              0.75 // Gaussian sigma in pixels (visual tuning knob)
+#define STAR_PSF_CUTOFF_PIXELS             4.0  // Stop evaluating beyond this radius (perf)
 
-#define STAR_PSF_SIGMA_PIXELS    0.65 // Gaussian sigma in pixels (visual tuning knob)
-#define STAR_PSF_CUTOFF_PIXELS   3.0  // Stop evaluating beyond this radius (perf)
+#define STAR_COLOR_KELVIN_MIN              2500.0
+#define STAR_COLOR_KELVIN_MAX              30000.0 //12000.0
+#define STAR_COLOR_CURVE_ADJUST            1.5 // > favors cold, < favors hot
 
-#define STAR_COLOR_KELVIN_MIN    2500.0
-#define STAR_COLOR_KELVIN_MAX    12000.0
+#define STAR_ATMOSPHERE_DENSITY_COEFF      0.2   // How much atmosphere dims stars at zenith (0.2 = mild)
+#define STAR_SCINTILLATION_SPEED           4.0   // How fast they twinkle
+#define STAR_TWINKLE_STRENGTH              0.3   // How intense the flicker is (0.0 = none, 1.0 = heavy)
+#define STAR_JITTER_STRENGTH               0.2   // Position wobble (in pixels)
 
-
+#define STAR_UNRESOLVED_GRID_SCALE         2500.0  // Higher = smaller patches (more grain, more detail)
+#define STAR_UNRESOLVED_SAMPLES_PER_PATCH  8       // More = smoother + brighter (cost is tiny)
+#define STAR_UNRESOLVED_STAR_PROBABILITY   0.75    // Chance each sample exists in the patch
+#define STAR_UNRESOLVED_BRIGHTNESS_ADJUST  0.35    // Skew towards the dim end (more realistic)
+#define STAR_UNRESOLVED_INTENSITY_SCALE    10.0    // Artistic knob: overall background strength
+#define STAR_UNRESOLVED_BRIGHTNESS_MIN     (STAR_BRIGHTNESS_MAX + 0.5)
+#define STAR_UNRESOLVED_BRIGHTNESS_MAX     (STAR_BRIGHTNESS_MAX + 7.5)
 
 //==================================================================
 //                        --- STRUCTURES ---
@@ -452,7 +470,7 @@ CelestialSphere initCelestialSphere(Camera camera, float time)
     // The sky rotates around the up axis.
     // We rotate the vector by -time * speed.
     // (Negative because sky moves opposite to earth rotation)
-    celestialSphere.rotatedRay = rotateAroundAxis(camera.rayDirection, SKY_ROTATION_AXIS, -time * SKY_ROTATION_SPEED);
+    celestialSphere.rotatedRay = rotateAroundAxis(camera.rayDirection, CELESTIAL_SPHERE_ROTATION_AXIS, -time * CELESTIAL_SPHERE_ROTATION_SPEED);
     
     return celestialSphere;
 }
@@ -462,7 +480,7 @@ vec3 getCelestialRay(vec3 dirWorld, float time)
     // The sky rotates around the up axis.
     // We rotate the vector by -time * speed.
     // (Negative because sky moves opposite to earth rotation)
-    return rotateAroundAxis(dirWorld, SKY_ROTATION_AXIS, -time * SKY_ROTATION_SPEED);
+    return rotateAroundAxis(dirWorld, CELESTIAL_SPHERE_ROTATION_AXIS, -time * CELESTIAL_SPHERE_ROTATION_SPEED);
 }
 
 /*--------------------------------------

@@ -8,11 +8,6 @@
                  Constants
 --------------------------------------------*/
 
-// Note: These values are < 1.0. They will look black until tonemapped
-// or unless your monitor brightness is high.
-const vec3 SKY_ZENITH_COLOR   = vec3(0.002, 0.004, 0.010); // Deepest space blue
-const vec3 SKY_HORIZON_COLOR  = vec3(0.010, 0.025, 0.030); // Hazy teal near ground
-const vec3 SKY_AIRGLOW_COLOR  = vec3(0.010, 0.040, 0.030); // Faint green/teal emission
 
 /*------------------------------------------
                Control Panel
@@ -53,14 +48,14 @@ AirGlow initAirGlow(float altitude)
     
     // A subtle bump in brightness slightly above the horizon.
     // We want a peak at say, 10-15 degrees altitude.
-    airglow.center    = AIRGLOW_CENTER;
-    airglow.bandWidth = AIRGLOW_BAND_WIDTH;
+    airglow.center    = SKY_AIRGLOW_CENTER;
+    airglow.bandWidth = SKY_AIRGLOW_BAND_WIDTH;
     
     // Gaussian-ish shape: exp( - (x - center)^2 * width )
     float airglowDist = altitude - airglow.center;
     airglow.mask      = exp(-(airglowDist * airglowDist) * airglow.bandWidth);
     
-    airglow.color     = SKY_AIRGLOW_COLOR * airglow.mask;
+    airglow.color     = SKY_AIRGLOW_COLOR * airglow.mask * SKY_AIRGLOW_INTENSITY;
     
     return airglow;
 }
@@ -82,7 +77,7 @@ Atmosphere initAtmosphere(Camera camera)
     
     // Note: This is "Atmosphere", so it stays fixed to the world (ground),
     // it does NOT rotate with the stars (Celestial Sphere).
-    atmosphere.skyColor = mix(SKY_HORIZON_COLOR, SKY_ZENITH_COLOR, pow(atmosphere.altitude, 0.4));
+    atmosphere.skyColor = mix(SKY_HORIZON_COLOR, SKY_ZENITH_COLOR, pow(atmosphere.altitude, 0.4)) * SKY_COLOR_INTENSITY;
     
     // Get airglow
     atmosphere.airGlow = initAirGlow(atmosphere.altitude);

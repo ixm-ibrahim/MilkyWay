@@ -108,7 +108,7 @@ void mainImage( out vec4 fragColor, in vec2 fragCoord )
     if (DEBUG_MODE == DEBUG_STAR_GRID)
     {
         // 0. Allow camera panning
-        //camera = applyDebugCameraPan(camera, time, iResolution);
+        camera = applyDebugCameraPan(camera, time, iResolution);
         
         // 1. Get the ray that the Star System sees (Celestial Ray)
         vec3 dirCelestial = getCelestialRay(camera.rayDirection, time);
@@ -149,7 +149,6 @@ void mainImage( out vec4 fragColor, in vec2 fragCoord )
     }
     if (DEBUG_MODE == DEBUG_STAR_LUMINANCE)
     {
-        // Placeholder until stars exist: show luminance of the current HDR composite
         float lum = dot(hdr, vec3(0.2126, 0.7152, 0.0722));
         if (DEBUG_USE_TEST_COLOR) fragColor = toFrag(debugColorRamp(saturate(lum)));
         return;
