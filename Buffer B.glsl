@@ -256,35 +256,38 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord)
     return;
 #endif
 
-    Camera camera = initCamera(fragCoord, iResolution);
+    float time = getTimeSeconds(iTime);
+    Camera camera = initCamera(fragCoord, iResolution, iMouse);
+    CelestialSphere celestialSphere = initCelestialSphere(camera, time);
     
     // Apply Debug Pan if enabled
 #if (DEBUG_MODE == DEBUG_CAMERA_PAN)
-    camera = applyDebugCameraPan(camera, getTimeSeconds(iTime), iResolution);
+    applyDebugCameraPan(camera, celestialSphere, time, iResolution);
 #endif
-
+    
     // 1. Get World Ray
     vec3 dirWorld = camera.rayDirection;
-
-    // 2. Apply Celestial Rotation (M2) to get Celestial Ray
-    float time = getTimeSeconds(iTime); // Get common time
-    vec3 dirCelestial = getCelestialRay(dirWorld, time);
     
-    // --- M6: Altitude Calculation ---
+    // 2. Altitude Calculation
     // Atmosphere is attached to Earth (World Space), not the rotating sky.
     // We clamp to 0.0 so stars below the horizon don't do weird math, 
     // though they are usually culled by the ground in a full scene.
     float altitude = max(0.0, dot(dirWorld, AXIS_UP));
 
     // --- CORRECTION START ---
-    // Fix Rectilinear Stretching at wide FOVs.
-    float cosTheta = dot(dirWorld, camera.orientation.forward);
+    // Rectilinear projection: angular size per pixel shrinks off-axis by cos^2(theta).
+    // theta here is the angle from the *center* view ray.
+    Camera camCenter = camera;
+    camCenter.normalizedUV = vec2(0.0);
+    vec3 centerRay = getRay(camCenter, iResolution, iMouse);
+
+    float cosTheta = saturate(dot(dirWorld, centerRay));
     camera.pixelScale *= (cosTheta * cosTheta);
     // --- CORRECTION END ---
     
     // 3. Evaluate Stars (M4 + M5 + M6)
     // Pass altitude and time for extinction and twinkle
-    vec3 starRadiance = evalStars(dirCelestial, camera.pixelScale, altitude, time);
+    vec3 starRadiance = evalStars(celestialSphere.rotatedRay, camera.pixelScale, altitude, time);
 
     // 4. Output HDR
     fragColor = toFrag(starRadiance);

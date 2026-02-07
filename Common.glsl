@@ -63,7 +63,7 @@ const vec3 DIM_BLUE   = vec3(0.05, 0.05, 0.25);
 #define DEBUG_MILKYWAY_MASK            9
 
 #define DEBUG_MODE                     DEBUG_OFF
-#define DEBUG_USE_TEST_COLOR           true
+#define DEBUG_USE_TEST_COLOR           false
 
 #define DEBUG_ENABLE_FREEZE_TIME       false
 #define DEBUG_FROZEN_TIME_SECONDS      0.1
@@ -84,12 +84,16 @@ const vec3 DIM_BLUE   = vec3(0.05, 0.05, 0.25);
 #define CAMERA_MIN_FOV_DEGREES    10.0
 #define CAMERA_MAX_FOV_DEGREES    120.0
 
+#define CAMERA_MOUSE_YAW_RANGE    180.0 // degrees
+#define CAMERA_MOUSE_PITCH_RANGE  45.0
+
 /*------------------------------------------
             2. CELESTIAL SPHERE
 --------------------------------------------*/
 
-#define CELESTIAL_SPHERE_ROTATION_AXIS   AXIS_UP
-#define CELESTIAL_SPHERE_ROTATION_SPEED  0.01 // radians per second
+#define CELESTIAL_SPHERE_LATITUDE  40.0 // degrees
+#define CELESTIAL_SPHERE_AZIMUTH   30.0 // degrees
+#define CELESTIAL_SPHERE_SPEED     0.01 // radians per second
 
 /*------------------------------------------
                    3. SKY
@@ -387,7 +391,47 @@ mat3 getCameraMatrix(Camera camera)
     return mat3(right, up, forward);
 }
 
-vec3 getRay(Camera camera)
+mat3 applyMousePan(mat3 basis, vec4 iMouse, vec3 iResolution)
+{
+    // If mouse hasn’t been used yet, keep camera unchanged.
+    // Shadertoy often has iMouse.xy == (0,0) until you click/drag.
+    if (iMouse.x <= 0.0 && iMouse.y <= 0.0) return basis;
+
+    // Map mouse to [-1, 1] around screen center.
+    vec2 mouse01 = iMouse.xy / iResolution.xy;      // [0,1]
+    vec2 m = (mouse01 - 0.5) * 2.0;                 // [-1,1]
+
+    float yawMax   = radians(CAMERA_MOUSE_YAW_RANGE);
+    float pitchMax = radians(CAMERA_MOUSE_PITCH_RANGE);
+
+    float yaw   = m.x * yawMax;
+    float pitch = -m.y * pitchMax;                  // invert: up mouse = look up
+
+    pitch = clampPitch(pitch);
+
+    // basis columns are (right, up, forward) in your getCameraMatrix()
+    vec3 right   = normalize(basis[0]);
+    vec3 up      = normalize(basis[1]);
+    vec3 forward = normalize(basis[2]);
+
+    // Apply yaw around world up (keeps "horizon feel" consistent).
+    forward = rotateAroundAxis(forward, AXIS_UP, yaw);
+    right   = rotateAroundAxis(right,   AXIS_UP, yaw);
+    up      = rotateAroundAxis(up,      AXIS_UP, yaw);
+
+    // Apply pitch around camera right (after yaw).
+    forward = rotateAroundAxis(forward, right, pitch);
+    up      = rotateAroundAxis(up,      right, pitch);
+
+    // Re-orthonormalize lightly (numerical safety)
+    forward = normalize(forward);
+    right   = normalize(cross(forward, up));
+    up      = normalize(cross(right, forward));
+
+    return mat3(right, up, forward);
+}
+
+vec3 getRay(Camera camera, vec3 iResolution, vec4 iMouse)
 {
     // 1. Adjust for Field of View (zoom)
     float tanHalfFov = tan(camera.fovY * 0.5);
@@ -395,7 +439,10 @@ vec3 getRay(Camera camera)
 
     // 2. Rotate into world space (right, up, forward basis).
     mat3 basis = getCameraMatrix(camera);
-
+    
+    // 3. Apply mouse pan
+    basis = applyMousePan(basis, iMouse, iResolution);
+    
     // 3. Local ray points "forward" (z=1) with offsets in x/y.
     vec3 dirLocal = normalize(vec3(screenPlane, 1.0));
     vec3 dirWorld = basis * dirLocal;
@@ -427,7 +474,7 @@ float setCameraFov(float fovRadians)
     return clamp(fovRadians, minFov, maxFov);
 }
 
-Camera initCamera(vec2 fragCoord, vec3 iResolution)
+Camera initCamera(vec2 fragCoord, vec3 iResolution, vec4 iMouse)
 {
     Camera camera;
     
@@ -441,16 +488,16 @@ Camera initCamera(vec2 fragCoord, vec3 iResolution)
     camera.normalizedUV = getNormalizedUV(camera.uv, iResolution);
     
     // 3. Compute Ray and Scale
-    camera.rayDirection = getRay(camera);
+    camera.rayDirection = getRay(camera, iResolution, iMouse);
     camera.pixelScale   = getPixelAngularScale(camera, iResolution.y);
     
     return camera;
 }
 
-Camera adjustCameraByFov(Camera camera, float offset, vec3 iResolution)
+Camera adjustCameraByFov(Camera camera, float offset, vec3 iResolution, vec4 iMouse)
 {
     camera.fovY = setCameraFov(camera.fovY + offset);
-    camera.rayDirection = getRay(camera);
+    camera.rayDirection = getRay(camera, iResolution, iMouse);
     camera.pixelScale = getPixelAngularScale(camera, iResolution.y);
     
     return camera;
@@ -460,27 +507,44 @@ Camera adjustCameraByFov(Camera camera, float offset, vec3 iResolution)
                   Sky
 ----------------------------------------*/
 
+vec3 getCelestialRotationAxis(float latitudeDeg, float azimuthDeg)
+{
+    // Local frame conventions assumed:
+    // AXIS_UP      = +Y
+    // "north"      = -Z (you can change this if your world uses a different convention)
+    // "east"       = +X
+    vec3 north = normalize(vec3(0.0, 0.0, -1.0));
+    vec3 east  = normalize(cross(AXIS_UP, north)); // should be +X with the above north
+
+    // Spin the horizontal directions around up so you can aim "north" anywhere
+    float az = radians(azimuthDeg);
+    vec3 northRot = normalize(north * cos(az) + east * sin(az));
+
+    // Celestial pole altitude above horizon = latitude.
+    // Axis is tilted from horizon toward up by latitude, along the north direction.
+    float lat = radians(clamp(latitudeDeg, -90.0, 90.0));
+
+    // Build axis as a combination of "up" and "north"
+    // lat=0 => axis points along north horizon (equator behavior)
+    // lat=90 => axis is straight up (pole behavior)
+    vec3 axis = normalize(AXIS_UP * sin(lat) + northRot * cos(lat));
+
+    // Southern hemisphere: this formula already handles sign via sin(lat),
+    // but the "toward which pole" is also encoded by northRot; this remains consistent.
+    return axis;
+}
+
 CelestialSphere initCelestialSphere(Camera camera, float time)
 {
     CelestialSphere celestialSphere;
     
-    celestialSphere.rotationAxis = vec3(0.0);
-    celestialSphere.rotationValue = 0.0;
+    celestialSphere.rotationValue = time * CELESTIAL_SPHERE_SPEED;
+    celestialSphere.rotationAxis  = getCelestialRotationAxis(CELESTIAL_SPHERE_LATITUDE, CELESTIAL_SPHERE_AZIMUTH);
     
-    // The sky rotates around the up axis.
-    // We rotate the vector by -time * speed.
-    // (Negative because sky moves opposite to earth rotation)
-    celestialSphere.rotatedRay = rotateAroundAxis(camera.rayDirection, CELESTIAL_SPHERE_ROTATION_AXIS, -time * CELESTIAL_SPHERE_ROTATION_SPEED);
+    // Negative because sky moves opposite to earth rotation
+    celestialSphere.rotatedRay    = rotateAroundAxis(camera.rayDirection, celestialSphere.rotationAxis, -celestialSphere.rotationValue);
     
     return celestialSphere;
-}
-
-vec3 getCelestialRay(vec3 dirWorld, float time)
-{
-    // The sky rotates around the up axis.
-    // We rotate the vector by -time * speed.
-    // (Negative because sky moves opposite to earth rotation)
-    return rotateAroundAxis(dirWorld, CELESTIAL_SPHERE_ROTATION_AXIS, -time * CELESTIAL_SPHERE_ROTATION_SPEED);
 }
 
 /*--------------------------------------
@@ -597,15 +661,15 @@ vec3 tonemapPlaceholder(vec3 hdr)
     return saturate(hdr);
 }
 
-Camera applyDebugCameraPan(Camera camera, float timeSeconds, vec3 iResolution)
+void applyDebugCameraPan(out Camera camera, out CelestialSphere celestialSphere, float time, vec3 iResolution)
 {
     // This is a verification helper for M1:
     // when enabled (DEBUG_CAMERA_PAN) the camera slowly yaws/pitches over time so
     // DEBUG_VIEW_RAY should "rotate smoothly" (per the plan).
     //
     // IMPORTANT: This is a *debug* motion. Real sky rotation will be in M2.
-    float yaw   = 3.5 * sin(timeSeconds * 0.25);
-    float pitch = 2.0 * sin(timeSeconds * 0.19);
+    float yaw   = 3.5 * sin(time * 0.25);
+    float pitch = 2.0 * sin(time * 0.19);
     
     // To prevent weird behavior at the poles
     pitch = clampPitch(pitch);
@@ -619,11 +683,11 @@ Camera applyDebugCameraPan(Camera camera, float timeSeconds, vec3 iResolution)
     camera.orientation.forward = normalize(forwardDir);
 
     // Keep camera.forward consistent with our "direction" interpretation.
-    camera.orientation.forward = camera.position + camera.orientation.forward;
+    //camera.orientation.forward = camera.position + camera.orientation.forward;
 
     // Recompute ray and pxScale for the new orientation.
-    camera.rayDirection = getRay(camera);
+    camera.rayDirection = getRay(camera, iResolution, vec4(0.0));
     camera.pixelScale   = getPixelAngularScale(camera, iResolution.y);
-
-    return camera;
+    
+    celestialSphere = initCelestialSphere(camera, time);
 }

@@ -9,7 +9,9 @@
 
 void mainImage( out vec4 fragColor, in vec2 fragCoord )
 {
-    Camera camera = initCamera(fragCoord, iResolution);
+    float time = getTimeSeconds(iTime);
+    Camera camera = initCamera(fragCoord, iResolution, iMouse);
+    CelestialSphere celestialSphere = initCelestialSphere(camera, time);
     
     // Get results from buffers
     vec3 hdrA = ENABLE_BUFFER_A ? texture(iChannel0, camera.uv).rgb : BLACK;
@@ -32,13 +34,9 @@ void mainImage( out vec4 fragColor, in vec2 fragCoord )
         return;
     }
     
-#if SHOW_DEBUG
-    float time = getTimeSeconds(iTime);
-    
-    CelestialSphere celestialSphere = initCelestialSphere(camera, time);
-    
     fragColor = vec4(ldr, 1.0);
     
+#if SHOW_DEBUG
     if (DEBUG_MODE == DEBUG_VIEW_RAY)
     {
         // Map Vector (-1..1) to Color (0..1)
@@ -48,7 +46,7 @@ void mainImage( out vec4 fragColor, in vec2 fragCoord )
     }
     if (DEBUG_MODE == DEBUG_CAMERA_PAN)
     {
-        camera = applyDebugCameraPan(camera, time, iResolution);
+        applyDebugCameraPan(camera, celestialSphere, time, iResolution);
         if (DEBUG_USE_TEST_COLOR) fragColor = toFrag(camera.rayDirection * 0.5 + 0.5);
         
         // Verification: show how close the camera "forward" is to its "up"
@@ -63,7 +61,7 @@ void mainImage( out vec4 fragColor, in vec2 fragCoord )
     if (DEBUG_MODE == DEBUG_PIXEL_SCALE)
     {
         float change = sin(time);
-        camera = adjustCameraByFov(camera, change, iResolution);
+        camera = adjustCameraByFov(camera, change, iResolution, iMouse);
         // Multiply by huge number so we can see it (scale is tiny!)
         if (DEBUG_USE_TEST_COLOR) fragColor = toFrag(vec3(camera.pixelScale * 300.0));
         return;
@@ -108,29 +106,26 @@ void mainImage( out vec4 fragColor, in vec2 fragCoord )
     if (DEBUG_MODE == DEBUG_STAR_GRID)
     {
         // 0. Allow camera panning
-        camera = applyDebugCameraPan(camera, time, iResolution);
+        applyDebugCameraPan(camera, celestialSphere, time, iResolution);
         
-        // 1. Get the ray that the Star System sees (Celestial Ray)
-        vec3 dirCelestial = getCelestialRay(camera.rayDirection, time);
+        // 1. Run the Mapping Logic
+        CubeMapFace mapData = getCubeMapFace(celestialSphere.rotatedRay);
         
-        // 2. Run the Mapping Logic
-        CubeMapFace mapData = getCubeMapFace(dirCelestial);
-        
-        // 3. Calculate Grid Coordinates (Same as evalStars)
+        // 2. Calculate Grid Coordinates (Same as evalStars)
         vec2 gridPos = mapData.uv * STAR_GRID_SCALE;
         vec2 cellID  = floor(gridPos);
         vec2 uvInCell = fract(gridPos);
         
-        // 4. Generate a Random Color for this Cell
+        // 3. Generate a Random Color for this Cell
         // We use the same seed logic: FaceID + CellID
         vec3 cellColor = hash33(vec3(cellID, mapData.id));
         
-        // 5. Draw Grid Lines (Borders)
+        // 4. Draw Grid Lines (Borders)
         // 0.05 is the line thickness relative to the cell size
         vec2 borders = step(0.05, uvInCell) * step(uvInCell, vec2(0.95));
         float isInterior = borders.x * borders.y;
         
-        // 6. Tint by Face ID (Optional, helps visualize the cube structure)
+        // 5. Tint by Face ID (Optional, helps visualize the cube structure)
         // Face 0=Redish, 1=Greenish, etc. just to see the macro cube
         vec3 faceTint = 0.5 + 0.5 * cos(vec3(0.0, 2.0, 4.0) + float(mapData.id));
         
