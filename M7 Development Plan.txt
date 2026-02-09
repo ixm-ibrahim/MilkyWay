@@ -1,0 +1,200 @@
+===============================================================================
+M7 — MILKY WAY CORE (BULGE + DISK) + INFRASTRUCTURE FOR LATER LAYERS
+(Aligned to current code + vision: one MilkyWay struct, minimal debug enums,
+galactic UV sampled per-direction via inout MilkyWay, and incremental testing.)
+===============================================================================
+
+HIGH-LEVEL INTENT (FAST > ACCURATE)
+-----------------------------------
+Scientifically accurate:
+  - Volumetric integration through an exponential disk + bulge/bar + dust extinction
+    along the view ray in a true galactic coordinate frame.
+Why we don't do that (yet):
+  - Too expensive for MVP; lots of sampling + noise + extinction to look right.
+
+M7 MVP (cheap-but-believable):
+  - Treat Milky Way content as 2D fields on the celestial sphere, in a stable
+    "galactic UV" coordinate system.
+  - Build three conceptual "objects":
+      (1) Rectangular Galaxy Region Mask (hard gate: MW work only inside)
+      (2) Disk field (brightness/color falloff shaped like the band)
+      (3) Bulge field (brighter, compact, separate controls)
+  - Combine them cleanly in Buffer C (HDR) and composite later.
+
+STRUCT + API CONVENTION (YOUR CURRENT DIRECTION)
+------------------------------------------------
+MilkyWay struct holds:
+  - Frame (global): galacticNormal, galacticCenterDir, axisU, axisV
+  - Sample (per-direction): uv, latitude, longitude
+  - Any and all other milky way-related values
+Functions:
+  - MilkyWay initMilkyWay()                 // frame only
+  - void setGalacticUV(inout mw, dirCelestial) // per pixel / per sample
+
+DEBUG ENUM POLICY (MINIMAL, ADD ONLY WHEN NEEDED)
+-------------------------------------------------
+Keep:
+  - DEBUG_MILKYWAY_GALACTIC_UV = 8   (verifies galactic UV stability + seams)
+  - DEBUG_MILKYWAY_MASK        = 9   (verifies final MW gating / composite mask)
+Add additional debug modes only when a new step cannot be verified with these.
+
+PASS OWNERSHIP (IMPORTANT, TO AVOID CONFUSION)
+----------------------------------------------
+- Stars live in Buffer B; Milky Way lives in Buffer C; Image composites.
+
+===============================================================================
+M7 DEVELOPMENT PLAN (INCREMENTAL SUBSTEPS)
+===============================================================================
+
+M7.0 — Debug harness for M7 (already done / keep clean)
+-------------------------------------------------------
+Goal:
+  - Confirm debug switching works and M7 can be inspected without ambiguity.
+Tasks:
+  [ ] Ensure DEBUG_MILKYWAY_GALACTIC_UV and DEBUG_MILKYWAY_MASK are wired in Image.
+Verification:
+  - Switching to each debug mode changes output deterministically.
+
+M7.1 — Galactic frame + galactic UV (FOUNDATION)
+------------------------------------------------
+Goal:
+  - Stable galactic coordinate system on the celestial sphere.
+Tasks (Common.glsl):
+  [ ] MilkyWay initMilkyWay() builds frame:
+      - galacticNormal
+      - galacticCenterDir (projected into plane)
+      - axisU, axisV orthonormal in-plane basis
+  [ ] setGalacticUV(inout mw, dirCelestial) writes:
+      - mw.latitude, mw.longitude, mw.uv (0..1)
+Tasks (Image.glsl debug):
+  [ ] DEBUG_MILKYWAY_GALACTIC_UV draws vec3(mw.uv,0)
+  [ ] Optional contouring for clarity: floor(uv*10)/10
+Verification:
+  - UV is stable when camera pans; only rotates with celestial rotation.
+  - Seam at U wrap is expected; everything else should be smooth.
+
+--- HOLD POINT ---
+Do not continue until UV is stable (no crawling/shimmer) and axis is correct.
+
+M7.2 — Rectangular Galaxy Region Mask (OBJECT #1: HARD GATE)
+------------------------------------------------------------
+Goal:
+  - Define a rectangular region in galactic UV where MW effects are allowed.
+Tasks (Common.glsl):
+  [ ] Implement a helper:
+      rectMask = getMilkyWayMask(uv, centerUV, halfSizeUV, edgeFeather)
+      - smooth edges (no hard sticker, to ensure that whatever is within the mask doesn't get cut off), should have some controllable thickness (add a define for this)
+  [ ] Store parameters in MilkyWay (or a nested params block):
+      - rectCenterUV
+      - rectHalfSizeUV (width, height)
+      - rectEdgeFeather
+Tasks (Buffer C):
+  [ ] Compute mw rectMask per pixel using mw.uv
+  [ ] In DEBUG_MILKYWAY_MASK, show rectMask only (grayscale)
+  [ ] Temporarily disable celestial sphere rotation, and center starting/default camera to look straight at the center of the mask and its north is up on the screen
+Verification:
+  - Outside rectangle: 0
+  - Inside: 1 (or smoothly feathered), stable in sky coords.
+
+--- HOLD POINT ---
+Tune rectangle placement/size until it frames where MW should exist.
+
+M7.3 — Disk field (OBJECT #2: BAND SHAPE, INDEPENDENT CONTROLS)
+---------------------------------------------------------------
+Goal:
+  - A disk brightness field that fades to 0 at its own edges.
+Concept:
+  - Use galactic latitude (distance from plane) + optional longitude falloff.
+  - Ideally, define mask coordinates ([0,1] within the rectangular mask, such that (0,0) is one corner and (1,1) is the other) and use those
+  - Pick whichever coordinate system is cheaper
+Tasks:
+  [ ] diskField = getDiskPhotometry(mw.latitude or uv.y):
+      - thickness control (diskHalfThickness)
+      - edge softness (diskFeather)
+      - optional length falloff along longitude (diskLonFalloff)
+      - all values should have their controls in the control panel
+  [ ] diskColor, diskBrightness independent parameters
+Output (Buffer C):
+  [ ] diskHDR = diskField * diskBrightness * diskColor
+Verification:
+  - Changing disk thickness/brightness does not affect bulge (not implemented yet).
+  - Disk is faint; avoid "fog stripe" look (target: subtle band). :contentReference[oaicite:0]{index=0}
+
+--- HOLD POINT ---
+Tune disk so it reads as a faint band, not a bright haze.
+
+M7.4 — Bulge field (OBJECT #3: CORE SHAPE, INDEPENDENT CONTROLS)
+---------------------------------------------------------------
+Goal:
+  - A bulge brightness field centered on galactic center direction.
+Concept:
+  - Use angular proximity to galacticCenterDir and/or an ellipse in UV space.
+Tasks:
+  [ ] bulgeField = evalBulgeField(mw, dirCelestial):
+      Option A (directional, cheap):
+        bulge = pow(max(0, dot(dirCelestial, mw.galacticCenterDir)), bulgePower)
+      Option B (elliptical in UV, more art-directable):
+        bulge = evalEllipse(uv, bulgeCenterUV, bulgeRadiiUV, bulgePower)
+  [ ] bulgeColor, bulgeBrightness independent parameters
+Output (Buffer C):
+  [ ] bulgeHDR = bulgeField * bulgeBrightness * bulgeColor
+Verification:
+  - Bulge is brighter than disk, compact, controllable independently.
+
+--- HOLD POINT ---
+Tune bulge until it “sits” correctly on the disk and feels like a bright core.
+
+M7.5 — Combine + gate (RECT MASK × (DISK + BULGE))
+--------------------------------------------------
+Goal:
+  - Clean composition that matches your “within MW mask” concept.
+Tasks (Buffer C):
+  [ ] gate = rectMask
+  [ ] mwHDR = gate * (diskHDR + bulgeHDR)
+  [ ] Optionally clamp/saturate only at the very end (stay HDR internally).
+Debug:
+  [ ] DEBUG_MILKYWAY_MASK shows final gate or final mwMask (grayscale)
+Verification:
+  - MW output is strictly zero outside rectangle.
+  - Inside, disk + bulge overlay looks plausible from “our perspective”.
+
+--- HOLD POINT ---
+Stop here if you want M7 to remain strictly "core geometry + infrastructure".
+
+M7.6 — Infrastructure scaffolding for later M8+ layers (NO NEW VISUAL DETAIL YET)
+---------------------------------------------------------------------------------
+Goal:
+  - Prepare hooks for nebulae/clouds/dust without adding complexity now.
+Tasks (Common.glsl / Buffer C):
+  [ ] Define placeholders (neutral defaults):
+      - mottleFactor = 1.0
+      - dustSubtract = 0.0
+      - nebulaAdd    = vec3(0)
+  [ ] Define stable "detail coordinates" derived from mw.uv:
+      - detailUV = mw.uv * detailScale (+ optional mild warp later)
+  [ ] Ensure all future layers will be evaluated only inside rectMask.
+Verification:
+  - Visual output unchanged from M7.5, but code now has clear extension points.
+
+===============================================================================
+"STOP / GO" CHECKLIST BEFORE MOVING PAST EACH STEP
+===============================================================================
+M7.1 OK if:
+  - DEBUG_MILKYWAY_GALACTIC_UV is stable (no crawling) and seam is expected.
+M7.2 OK if:
+  - DEBUG_MILKYWAY_MASK shows a stable, correctly placed rectangle gate.
+M7.3 OK if:
+  - Disk reads faint and controllable; not a bright fog stripe.
+M7.4 OK if:
+  - Bulge is clearly brighter and independently shaped/tinted.
+M7.5 OK if:
+  - Outside gate = 0 always; inside = plausible disk+bulge overlay.
+M7.6 OK if:
+  - Later layers can plug into detailUV + placeholders without refactoring.
+
+===============================================================================
+NOTES (ALIGNMENT TO ORIGINAL PROJECT GOALS)
+===============================================================================
+- Milky Way should remain subtle; the core is brighter but not blown out. :contentReference[oaicite:1]{index=1}
+- Procedural detail must be stable in sky coords when camera moves. :contentReference[oaicite:2]{index=2}
+===============================================================================

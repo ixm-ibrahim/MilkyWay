@@ -1,167 +1,190 @@
 // ============================================================================
-// IMAGE
-// M0: final composite + tonemap placeholder + debug override + NaN/Inf-ish guard.
+// BUFFER D
+// M9: Post (Bloom/Glare) + Exposure + Tonemap + Gamma + Dither.
+// Produces LDR (display-ready) output.
 // ============================================================================
+
+/*------------------------------------------
+               Control Panel
+--------------------------------------------*/
+
+// Verification toggles
+#define TEST_BUFFER_D_WIRING 0
+#define TEST_BLOOM_ONLY      0
+#define TEST_HDR_HEATMAP     0
+
+// Post toggles
+#define ENABLE_BLOOM         1
+#define ENABLE_DITHER        1
+
+// Exposure / Tonemap controls (start simple: fixed exposure)
+#define EXPOSURE             1.25   // Raise/lower overall brightness
+#define GAMMA                2.2
+
+// Bloom controls (cheap multi-tap blur)
+#define BLOOM_THRESHOLD      1.25   // Luminance threshold in HDR (pre-exposure)
+#define BLOOM_SOFT_KNEE      0.75   // Smooth transition width
+#define BLOOM_INTENSITY      0.35   // How much bloom is added back
+#define BLOOM_RADIUS_PIXELS  1.75   // Blur radius in pixels (small = subtle halos)
+
+/*------------------------------------------
+              Local Utilities
+--------------------------------------------*/
+
+float luminance(vec3 c)
+{
+    // Rec.709 / sRGB luminance
+    return dot(c, vec3(0.2126, 0.7152, 0.0722));
+}
+
+float softThreshold(float x, float threshold, float knee)
+{
+    // Smoothly ramps from 0 to 1 around the threshold to avoid hard edges.
+    // knee = 0 -> hard threshold.
+    if (knee <= 0.0) return step(threshold, x);
+
+    float t0 = threshold - knee;
+    float t1 = threshold + knee;
+    return saturate((x - t0) / (t1 - t0));
+}
+
+vec3 acesTonemap(vec3 x)
+{
+    // Cheap, widely-used ACES fitted curve (good default for star HDR).
+    // Works per-channel; assumes x is scene-referred linear HDR.
+    const float a = 2.51;
+    const float b = 0.03;
+    const float c = 2.43;
+    const float d = 0.59;
+    const float e = 0.14;
+    return saturate((x * (a * x + b)) / (x * (c * x + d) + e));
+}
+
+vec3 applyGamma(vec3 ldr)
+{
+    return pow(max(ldr, 0.0), vec3(1.0 / GAMMA));
+}
+
+vec3 sampleHDRComposite(vec2 uv)
+{
+    // Composite in HDR space
+    vec3 hdrA = texture(iChannel0, uv).rgb; // Buffer A
+    vec3 hdrB = texture(iChannel1, uv).rgb; // Buffer B
+    vec3 hdrC = texture(iChannel2, uv).rgb; // Buffer C
+    return hdrA + hdrB + hdrC;
+}
+
+vec3 bloomAt(vec2 uv, vec2 texel)
+{
+    // 9-tap “tiny glare” kernel. Intentionally small and cheap.
+    // We only bloom bright HDR contributions (integrated glow around bright stars).
+    vec3 s0 = sampleHDRComposite(uv);
+    vec3 s1 = sampleHDRComposite(uv + vec2( texel.x, 0.0));
+    vec3 s2 = sampleHDRComposite(uv + vec2(-texel.x, 0.0));
+    vec3 s3 = sampleHDRComposite(uv + vec2(0.0,  texel.y));
+    vec3 s4 = sampleHDRComposite(uv + vec2(0.0, -texel.y));
+    vec3 s5 = sampleHDRComposite(uv + vec2( texel.x,  texel.y));
+    vec3 s6 = sampleHDRComposite(uv + vec2(-texel.x,  texel.y));
+    vec3 s7 = sampleHDRComposite(uv + vec2( texel.x, -texel.y));
+    vec3 s8 = sampleHDRComposite(uv + vec2(-texel.x, -texel.y));
+
+    // Convert each sample into “bloom contribution” via soft threshold on luminance.
+    float w0 = softThreshold(luminance(s0), BLOOM_THRESHOLD, BLOOM_SOFT_KNEE);
+    float w1 = softThreshold(luminance(s1), BLOOM_THRESHOLD, BLOOM_SOFT_KNEE);
+    float w2 = softThreshold(luminance(s2), BLOOM_THRESHOLD, BLOOM_SOFT_KNEE);
+    float w3 = softThreshold(luminance(s3), BLOOM_THRESHOLD, BLOOM_SOFT_KNEE);
+    float w4 = softThreshold(luminance(s4), BLOOM_THRESHOLD, BLOOM_SOFT_KNEE);
+    float w5 = softThreshold(luminance(s5), BLOOM_THRESHOLD, BLOOM_SOFT_KNEE);
+    float w6 = softThreshold(luminance(s6), BLOOM_THRESHOLD, BLOOM_SOFT_KNEE);
+    float w7 = softThreshold(luminance(s7), BLOOM_THRESHOLD, BLOOM_SOFT_KNEE);
+    float w8 = softThreshold(luminance(s8), BLOOM_THRESHOLD, BLOOM_SOFT_KNEE);
+
+    // Kernel weights: center-heavy to keep halos subtle and local.
+    vec3 bloom =
+          s0 * (w0 * 0.28)
+        + s1 * (w1 * 0.12) + s2 * (w2 * 0.12)
+        + s3 * (w3 * 0.12) + s4 * (w4 * 0.12)
+        + s5 * (w5 * 0.06) + s6 * (w6 * 0.06)
+        + s7 * (w7 * 0.06) + s8 * (w8 * 0.06);
+
+    return bloom;
+}
 
 /*------------------------------------------
                     Main
 --------------------------------------------*/
 
-void mainImage( out vec4 fragColor, in vec2 fragCoord )
+void mainImage(out vec4 fragColor, in vec2 fragCoord)
 {
-    float time = getTimeSeconds(iTime);
-    Camera camera = initCamera(fragCoord, iResolution, iMouse);
-    CelestialSphere celestialSphere = initCelestialSphere(camera, time);
-    
-    // Get results from buffers
-    vec3 hdrA = ENABLE_BUFFER_A ? texture(iChannel0, camera.uv).rgb : BLACK;
-    vec3 hdrB = ENABLE_BUFFER_B ? texture(iChannel1, camera.uv).rgb : BLACK;
-    vec3 hdrC = ENABLE_BUFFER_C ? texture(iChannel2, camera.uv).rgb : BLACK;
-    
-    vec3 hdrFromABC = hdrA + hdrB + hdrC;
-    vec3 hdrFromD = ENABLE_BUFFER_D ? texture(iChannel3, camera.uv).rgb : hdrFromABC;
-
-    // Get buffer results
-    vec3 hdr = ENABLE_BUFFER_D ? hdrFromD : hdrFromABC;
-
-    // Tonemap placeholder (per M0 plan): clamp HDR to 0..1
-    vec3 ldr = tonemapPlaceholder(hdr);
-
-    // Safety/Debug: if something goes NaN/huge, paint with error color so you *notice* immediately.
-    if (isBadNumber(hdr) || isBadNumber(ldr))
-    {
-        fragColor = toFrag(ERROR_COLOR);
-        return;
-    }
-    
-    fragColor = vec4(ldr, 1.0);
-    
-#if SHOW_DEBUG
-    if (DEBUG_MODE == DEBUG_VIEW_RAY)
-    {
-        // Map Vector (-1..1) to Color (0..1)
-        // If this works, you will see a smooth gradient of colors.
-        if (DEBUG_USE_TEST_COLOR) fragColor = toFrag(camera.rayDirection * 0.5 + 0.5);
-        return;
-    }
-    if (DEBUG_MODE == DEBUG_CAMERA_PAN)
-    {
-        applyDebugCameraPan(camera, celestialSphere, time, iResolution);
-        if (DEBUG_USE_TEST_COLOR) fragColor = toFrag(camera.rayDirection * 0.5 + 0.5);
-        
-        // Verification: show how close the camera "forward" is to its "up"
-        // white = almost parallel (danger zone), black = perpendicular (safe)
-        vec3 forward = camera.orientation.forward;
-        float pole = abs(dot(forward, normalize(camera.orientation.up)));
-
-        //if (DEBUG_USE_TEST_COLOR) fragColor = toFrag(vec3(pole));
-        
-        return;
-    }
-    if (DEBUG_MODE == DEBUG_PIXEL_SCALE)
-    {
-        float change = sin(time);
-        camera = adjustCameraByFov(camera, change, iResolution, iMouse);
-        // Multiply by huge number so we can see it (scale is tiny!)
-        if (DEBUG_USE_TEST_COLOR) fragColor = toFrag(vec3(camera.pixelScale * 300.0));
-        return;
-    }
-    if (DEBUG_MODE == DEBUG_CELESTIAL_ROTATION)
-    {
-        // Allow camera panning
-        //camera = applyDebugCameraPan(camera, time, iResolution);
-        
-        // Create "Latitude Rings" for all 3 axes (X, Y, Z)
-        // We use asin() to get the angle, then cos() to make repeating rings.
-        float scale = 15.0; // How many rings?
-        
-        float ringsX = step(0.98, cos(asin(celestialSphere.rotatedRay.x) * scale)); // Red axis rings
-        float ringsY = step(0.98, cos(asin(celestialSphere.rotatedRay.y) * scale)); // Green axis rings
-        float ringsZ = step(0.98, cos(asin(celestialSphere.rotatedRay.z) * scale)); // Blue axis rings
-        
-        // Combine them
-        vec3 gridColor = BLACK;
-        gridColor += RED * ringsX; // Dim Red
-        gridColor += GREEN * ringsY; // Dim Green
-        gridColor += BLUE * ringsZ; // Dim Blue
-        
-        // 4. Create a "Red Dot" Marker at a fixed celestial coordinate
-        vec3 markerPos = normalize(vec3(-0.2, 0.2, -0.2));
-        float d = dot(celestialSphere.rotatedRay, markerPos);
-        float marker = smoothstep(0.9995, 0.9999, d);
-        
-        // Composite
-        // Base background
-        vec3 color = BLACK;
-        
-        // Add Grid
-        color += gridColor;
-        
-        // Add Marker (Solid White/Yellow to stand out against the colored grid)
-        color = mix(color, YELLOW, marker); 
-        
-        if (DEBUG_USE_TEST_COLOR) fragColor = toFrag(color);
-        return;
-    }
-    if (DEBUG_MODE == DEBUG_STAR_GRID)
-    {
-        // 0. Allow camera panning
-        applyDebugCameraPan(camera, celestialSphere, time, iResolution);
-        
-        // 1. Run the Mapping Logic
-        CubeMapFace mapData = getCubeMapFace(celestialSphere.rotatedRay);
-        
-        // 2. Calculate Grid Coordinates (Same as evalStars)
-        vec2 gridPos = mapData.uv * STAR_GRID_SCALE;
-        vec2 cellID  = floor(gridPos);
-        vec2 uvInCell = fract(gridPos);
-        
-        // 3. Generate a Random Color for this Cell
-        // We use the same seed logic: FaceID + CellID
-        vec3 cellColor = hash33(vec3(cellID, mapData.id));
-        
-        // 4. Draw Grid Lines (Borders)
-        // 0.05 is the line thickness relative to the cell size
-        vec2 borders = step(0.05, uvInCell) * step(uvInCell, vec2(0.95));
-        float isInterior = borders.x * borders.y;
-        
-        // 5. Tint by Face ID (Optional, helps visualize the cube structure)
-        // Face 0=Redish, 1=Greenish, etc. just to see the macro cube
-        vec3 faceTint = 0.5 + 0.5 * cos(vec3(0.0, 2.0, 4.0) + float(mapData.id));
-        
-        // Combine: Black borders, Random Cell Color, Subtle Face Tint
-        vec3 finalColor = mix(BLACK, cellColor * faceTint, isInterior);
-        
-        if (DEBUG_USE_TEST_COLOR) fragColor = toFrag(finalColor);
-        return;
-    }
-    if (DEBUG_MODE == DEBUG_STAR_ID)
-    {
-        // Placeholder until M4: stable per-pixel pattern to prove "mode changes"
-        float v = fract(sin(dot(fragCoord, vec2(12.9898, 78.233))) * 43758.5453);
-        if (DEBUG_USE_TEST_COLOR) fragColor = toFrag(debugColorRamp(v));
-        return;
-    }
-    if (DEBUG_MODE == DEBUG_STAR_LUMINANCE)
-    {
-        float lum = dot(hdr, vec3(0.2126, 0.7152, 0.0722));
-        if (DEBUG_USE_TEST_COLOR) fragColor = toFrag(debugColorRamp(saturate(lum)));
-        return;
-    }
-    if (DEBUG_MODE == DEBUG_GALACTIC_PLANE_DISTANCE)
-    {
-        // Placeholder until M7: show a constant so the switch is visibly working
-        if (DEBUG_USE_TEST_COLOR) fragColor = toFrag(debugColorRamp(0.25));
-        return;
-    }
-    if (DEBUG_MODE == DEBUG_MILKYWAY_MASK)
-    {
-        // Placeholder until M7: show a constant so the switch is visibly working
-        if (DEBUG_USE_TEST_COLOR) fragColor = toFrag(debugColorRamp(0.75));
-        return;
-    }
+#if TEST_BUFFER_D_WIRING
+    fragColor = toFrag(DIM_BLUE);
+    return;
 #endif
-    
-    // Output final result
+
+    vec2 uv = getUV(fragCoord, iResolution);
+
+    // --------------------------------------------------------------------
+    // Step 1) HDR composite (scene-referred, linear)
+    // --------------------------------------------------------------------
+    vec3 hdr = sampleHDRComposite(uv);
+
+#if TEST_HDR_HEATMAP
+    // Visualize HDR headroom (values > 1 should exist for bright stars)
+    float y = luminance(hdr);
+    // Simple pseudo-heatmap: 0..4 mapped to grayscale
+    fragColor = toFrag(vec3(saturate(y / 4.0)));
+    return;
+#endif
+
+    // --------------------------------------------------------------------
+    // Step 2) Bloom (cheap glare) in HDR space
+    // Scientifically: optics/eyes spread bright light into small halos.
+    // Cheap: threshold + tiny blur kernel, then add back.
+    // --------------------------------------------------------------------
+    vec3 bloom = BLACK;
+
+#if ENABLE_BLOOM
+    vec2 texel = 1.0 / iResolution.xy;
+    texel *= BLOOM_RADIUS_PIXELS;
+
+    bloom = bloomAt(uv, texel);
+#endif
+
+#if TEST_BLOOM_ONLY
+    fragColor = toFrag(bloom * BLOOM_INTENSITY);
+    return;
+#endif
+
+    vec3 hdrPost = hdr + bloom * BLOOM_INTENSITY;
+
+    // --------------------------------------------------------------------
+    // Step 3) Exposure (simple scalar)
+    // Scientifically: camera/eye exposure adapts; first pass = fixed control.
+    // --------------------------------------------------------------------
+    vec3 hdrExposed = hdrPost * EXPOSURE;
+
+    // --------------------------------------------------------------------
+    // Step 4) Tonemap (ACES) -> LDR linear
+    // --------------------------------------------------------------------
+    vec3 ldrLinear = acesTonemap(hdrExposed);
+
+    // --------------------------------------------------------------------
+    // Step 5) Dither (tiny noise before gamma/quantization)
+    // Scientifically: helps hide banding in smooth gradients.
+    // Cheap: hash noise in [−0.5, +0.5] at ~1/255 amplitude.
+    // --------------------------------------------------------------------
+#if ENABLE_DITHER
+    // Stable per-pixel noise
+    float n = hash12(fragCoord + vec2(17.0, 59.0)) - 0.5;
+    ldrLinear += (n / 255.0);
+    ldrLinear = saturate(ldrLinear);
+#endif
+
+    // --------------------------------------------------------------------
+    // Step 6) Gamma (display transform)
+    // --------------------------------------------------------------------
+    vec3 ldr = applyGamma(ldrLinear);
+
+    // Output result (LDR)
     fragColor = toFrag(ldr);
 }

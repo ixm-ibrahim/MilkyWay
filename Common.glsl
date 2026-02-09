@@ -59,11 +59,13 @@ const vec3 DIM_BLUE   = vec3(0.05, 0.05, 0.25);
 #define DEBUG_STAR_GRID                5
 #define DEBUG_STAR_ID                  6
 #define DEBUG_STAR_LUMINANCE           7
-#define DEBUG_GALACTIC_PLANE_DISTANCE  8
+#define DEBUG_MILKYWAY_GALACTIC_UV     8
 #define DEBUG_MILKYWAY_MASK            9
 
-#define DEBUG_MODE                     DEBUG_OFF
-#define DEBUG_USE_TEST_COLOR           false
+#define DEBUG_MODE                     DEBUG_MILKYWAY_MASK
+#define DEBUG_USE_TEST_COLOR           true
+#define DEBUG_ADD_CAMERA_PAN           1
+#define DEBUG_DISABLE_CYCLE            0
 
 #define DEBUG_ENABLE_FREEZE_TIME       false
 #define DEBUG_FROZEN_TIME_SECONDS      0.1
@@ -85,7 +87,7 @@ const vec3 DIM_BLUE   = vec3(0.05, 0.05, 0.25);
 #define CAMERA_MAX_FOV_DEGREES    120.0
 
 #define CAMERA_MOUSE_YAW_RANGE    180.0 // degrees
-#define CAMERA_MOUSE_PITCH_RANGE  45.0
+#define CAMERA_MOUSE_PITCH_RANGE  87.0
 
 /*------------------------------------------
             2. CELESTIAL SPHERE
@@ -113,7 +115,8 @@ const vec3 DIM_BLUE   = vec3(0.05, 0.05, 0.25);
                   4. STARS
 --------------------------------------------*/
 
-#define STAR_GRID_USE_ADJUSTMENT 1
+#define STAR_GRID_USE_ADJUSTMENT           1
+#define STAR_RECTILINEAR_PROJETION         1
 
 #define STAR_GRID_SCALE                    500.0 // Higher = smaller cells, more potential stars
 #define STAR_PROBABILITY                   0.25
@@ -142,6 +145,17 @@ const vec3 DIM_BLUE   = vec3(0.05, 0.05, 0.25);
 #define STAR_UNRESOLVED_INTENSITY_SCALE    10.0    // Artistic knob: overall background strength
 #define STAR_UNRESOLVED_BRIGHTNESS_MIN     (STAR_BRIGHTNESS_MAX + 0.5)
 #define STAR_UNRESOLVED_BRIGHTNESS_MAX     (STAR_BRIGHTNESS_MAX + 7.5)
+
+/*------------------------------------------
+                5. Milky Way
+--------------------------------------------*/
+
+#define MILKYWAY_GALACTIC_NORTH   normalize(vec3(0.25, 0.85, 0.46))   // to define the orientation of the galactic plane
+#define MILKYWAY_CELESTIAL_CENTER normalize(vec3(-0.90, 0.05, -0.43)) // will be changed to project onto the galactic plane
+
+#define MILKYWAY_MASK_CENTER      vec2(0.50, 0.50)  // (U=longitude, V=latitude)
+#define MILKYWAY_MASK_SIZE        vec2(0.40, 0.20)  // width, height
+#define MILKYWAY_MASK_FALLOFF     0.02              // UV feather thickness for soft edges
 
 //==================================================================
 //                        --- STRUCTURES ---
@@ -187,6 +201,25 @@ struct Star
     float magnitude;    // Brightness (logarithmic)
     float tempKelvin;   // Color temperature
     vec3  radiance;     // Pre-calculated base energy (white)
+};
+
+struct MilkyWay
+{
+    vec2 uv;
+    float latitude;
+    float longitude;
+    
+    // Galactic coordinate frame (all in celestial space)
+    vec3 galacticNorth;      // The milky way's axis of rotation (perpendicular to the galactic plane)
+    vec3 celestialCenter;    // Direction toward galactic center (will be projected onto the galactic plane)
+    vec3 axisU;              // celestialCenter projected on the galactic plane (to be perpendicular to galactic north, defines longitude = 0)
+    vec3 axisV;              // perpendicular to both galactic north and axisU (the plane that axisU and axisV define defines latitude = 0)
+    
+    vec2 maskCenter;         // (0.5, 0.5) is longitude = 0 (U axis), latitude = 0 (V axis)
+    vec2 maskSize;
+    float maskFalloff;
+    
+    float mask;
 };
 
 //==================================================================
@@ -248,6 +281,12 @@ vec2 remap(vec2 value, vec2 old_min, vec2 old_max, vec2 new_min, vec2 new_max)
     return new_min + (value - old_min) * (new_max - new_min) / (old_max - old_min);
 }
 
+float wrapDistance01(float a, float b)
+{
+    // Map to [-0.5, 0.5] so the seam behaves like a torus in U.
+    return fract(a - b + 0.5) - 0.5;
+}
+
 vec3 safeNormalize(vec3 v, vec3 fallback)
 {
     float len2 = dot(v, v);
@@ -275,6 +314,7 @@ vec3 rotateAroundAxis(vec3 v, vec3 axis, float angle)
             Color & Lighting
 ----------------------------------------*/
 
+vec4 toFrag(float color) { return vec4(vec3(color), 1.0); }
 vec4 toFrag(vec3 color) { return vec4(color, 1.0); }
 
 float magnitudeToRadiance(float mag)
@@ -632,6 +672,67 @@ vec3 getDirFromCubemap(CubeMapFace cubeMapFace)
     return normalize(dir);
 }
 
+/*--------------------------------------
+                MilkyWay
+----------------------------------------*/
+
+MilkyWay setMilkyWayUV(out MilkyWay milkyWay, vec3 dirCelestial)
+{
+    float sinLat = clamp(dot(dirCelestial, milkyWay.galacticNorth), -1.0, 1.0);
+    float lat = asin(sinLat);
+
+    float x = dot(dirCelestial, milkyWay.axisU);
+    float y = dot(dirCelestial, milkyWay.axisV);
+    float lon = atan(y, x);
+
+    milkyWay.latitude = lat;
+    milkyWay.longitude = lon;
+    milkyWay.uv  = vec2(lon / TAU + 0.5, lat / PI + 0.5);
+
+    return milkyWay;
+}
+
+void setMilkyWayMask(out MilkyWay milkyWay)
+{
+    float du = abs(wrapDistance01(milkyWay.uv.x, milkyWay.maskCenter.x));
+    float dv = abs(milkyWay.uv.y - milkyWay.maskCenter.y);
+
+    vec2 d = vec2(du, dv) - milkyWay.maskSize / 2.0; // <= 0 inside per-axis
+    float outside = max(d.x, d.y);                   // <= 0 inside rect, >0 outside
+
+    // 1.0 inside, feather to 0.0 outside over [0, milkyWay.rectEdgeFeather]
+    milkyWay.mask = 1.0 - smoothstep(0.0, milkyWay.maskFalloff, outside);
+}
+
+MilkyWay initMilkyWay(CelestialSphere celestialSphere)
+{
+    MilkyWay milkyWay;
+    
+    // 1) Define galactic north (normal of the galactic plane) and  (both in celestial space)
+    milkyWay.galacticNorth    = safeNormalize(MILKYWAY_GALACTIC_NORTH, AXIS_UP);
+    milkyWay.celestialCenter = safeNormalize(MILKYWAY_CELESTIAL_CENTER, AXIS_FORWARD);
+
+    // 2) Force center direction to lie in the plane (project out any normal component)
+    vec3 centerInPlane = milkyWay.celestialCenter - milkyWay.galacticNorth * dot(milkyWay.celestialCenter, milkyWay.galacticNorth);
+    milkyWay.axisU = safeNormalize(centerInPlane, AXIS_FORWARD);
+
+    // 3) Complete an orthonormal basis for the plane
+    milkyWay.axisV = safeNormalize(cross(milkyWay.galacticNorth, milkyWay.axisU), AXIS_RIGHT);
+
+    // 4) Get milky way coordinates on the celestial sphere
+    setMilkyWayUV(milkyWay, celestialSphere.rotatedRay);
+    
+    // 5) Rectangle gate parameters (galactic UV space)
+    milkyWay.maskCenter  = MILKYWAY_MASK_CENTER;
+    milkyWay.maskSize    = MILKYWAY_MASK_SIZE;
+    milkyWay.maskFalloff = MILKYWAY_MASK_FALLOFF;
+    
+    // 6) Gate for rendering
+    setMilkyWayMask(milkyWay);
+    
+    return milkyWay;
+}
+
 //==================================================================
 //                   --- DEBUGGING FUNCTIONS ---
 //==================================================================
@@ -661,7 +762,7 @@ vec3 tonemapPlaceholder(vec3 hdr)
     return saturate(hdr);
 }
 
-void applyDebugCameraPan(out Camera camera, out CelestialSphere celestialSphere, float time, vec3 iResolution)
+void applyDebugCameraPan(out Camera camera, out CelestialSphere celestialSphere, float time, vec3 iResolution, vec4 iMouse)
 {
     // This is a verification helper for M1:
     // when enabled (DEBUG_CAMERA_PAN) the camera slowly yaws/pitches over time so
@@ -686,7 +787,7 @@ void applyDebugCameraPan(out Camera camera, out CelestialSphere celestialSphere,
     //camera.orientation.forward = camera.position + camera.orientation.forward;
 
     // Recompute ray and pxScale for the new orientation.
-    camera.rayDirection = getRay(camera, iResolution, vec4(0.0));
+    camera.rayDirection = getRay(camera, iResolution, iMouse);
     camera.pixelScale   = getPixelAngularScale(camera, iResolution.y);
     
     celestialSphere = initCelestialSphere(camera, time);

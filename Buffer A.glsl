@@ -103,15 +103,6 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord)
 
     // 1. Initialize Camera to get the correct ray for this pixel
     Camera camera = initCamera(fragCoord, iResolution, iMouse);
-    
-    // 2. Optional: Apply Debug Pan (M1/M2 check)
-    // If DEBUG_CAMERA_PAN is on in Common, we want Buffer A to respect it
-    // so the background moves with the camera.
-#if (DEBUG_MODE == DEBUG_CAMERA_PAN)
-    float time = getTimeSeconds(iTime);
-    CelestialSphere celestialSphere = initCelestialSphere(camera, time);
-    applyDebugCameraPan(camera, celestialSphere, getTimeSeconds(iTime), iResolution);
-#endif
 
     // 3. Get the ray direction in World Space
     Atmosphere atmosphere = initAtmosphere(camera);

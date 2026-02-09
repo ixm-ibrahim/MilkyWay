@@ -260,11 +260,6 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord)
     Camera camera = initCamera(fragCoord, iResolution, iMouse);
     CelestialSphere celestialSphere = initCelestialSphere(camera, time);
     
-    // Apply Debug Pan if enabled
-#if (DEBUG_MODE == DEBUG_CAMERA_PAN)
-    applyDebugCameraPan(camera, celestialSphere, time, iResolution);
-#endif
-    
     // 1. Get World Ray
     vec3 dirWorld = camera.rayDirection;
     
@@ -274,7 +269,7 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord)
     // though they are usually culled by the ground in a full scene.
     float altitude = max(0.0, dot(dirWorld, AXIS_UP));
 
-    // --- CORRECTION START ---
+#if STAR_RECTILINEAR_PROJETION
     // Rectilinear projection: angular size per pixel shrinks off-axis by cos^2(theta).
     // theta here is the angle from the *center* view ray.
     Camera camCenter = camera;
@@ -283,7 +278,7 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord)
 
     float cosTheta = saturate(dot(dirWorld, centerRay));
     camera.pixelScale *= (cosTheta * cosTheta);
-    // --- CORRECTION END ---
+#endif
     
     // 3. Evaluate Stars (M4 + M5 + M6)
     // Pass altitude and time for extinction and twinkle
