@@ -68,9 +68,10 @@ vec3 applyGamma(vec3 ldr)
 vec3 sampleHDRComposite(vec2 uv)
 {
     // Composite in HDR space
-    vec3 hdrA = texture(iChannel0, uv).rgb; // Buffer A
-    vec3 hdrB = texture(iChannel1, uv).rgb; // Buffer B
-    vec3 hdrC = texture(iChannel2, uv).rgb; // Buffer C
+    vec3 hdrA = ENABLE_BUFFER_A ? texture(iChannel0, uv).rgb : BLACK; // Buffer A
+    vec3 hdrB = ENABLE_BUFFER_B ? texture(iChannel1, uv).rgb : BLACK; // Buffer B
+    vec3 hdrC = ENABLE_BUFFER_C ? texture(iChannel2, uv).rgb : BLACK; // Buffer C
+    
     return hdrA + hdrB + hdrC;
 }
 

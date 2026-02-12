@@ -8,13 +8,20 @@
 //                        --- CONSTANTS ---
 //==================================================================
 
+const float HALF_PI = 1.57079632679489661923;
 const float PI      = 3.14159265358979323846;
 const float TAU     = 6.28318530717958647692;
 
+const float LN2     = 0.69314718055994530941;
+
 const float EPSILON_12 = 1e-12;
 const float EPSILON_4  = 1e-4;
+const float EPSILON_1  = 1e-1;
 
 const float ALMOST_ONE_4 = 1.0 - EPSILON_4;
+
+const float ZERO = 0.0;
+const float ONE  = 1.0;
 
 const vec3 ORIGIN       = vec3(0.0);
 const vec3 AXIS_FORWARD = vec3(0.0, 0.0, -1.0); // Z is usually forward/back
@@ -61,15 +68,20 @@ const vec3 DIM_BLUE   = vec3(0.05, 0.05, 0.25);
 #define DEBUG_STAR_LUMINANCE           7
 #define DEBUG_MILKYWAY_GALACTIC_UV     8
 #define DEBUG_MILKYWAY_MASK            9
+#define DEBUG_MILKYWAY_COORDS          10
+#define DEBUG_MILKYWAY_DISK            11
+#define DEBUG_MILKYWAY_BULGE           12
+#define DEBUG_MILKYWAY_CORE            13
 
-#define DEBUG_MODE                     DEBUG_MILKYWAY_MASK
+#define DEBUG_MODE                     DEBUG_OFF
 #define DEBUG_USE_TEST_COLOR           true
 #define DEBUG_ADD_CAMERA_PAN           1
 #define DEBUG_DISABLE_CYCLE            0
+#define DEBUG_MILKYWAY_COORDS_GRID     vec2(10.0, 10.0) // degrees
 
 #define DEBUG_ENABLE_FREEZE_TIME       false
 #define DEBUG_FROZEN_TIME_SECONDS      0.1
-#define DEBUG_TIME_SPEED_SCALE         0.9
+#define DEBUG_TIME_SPEED_SCALE         1.0
 
 #define ERROR_COLOR                    MAGENTA
 
@@ -93,9 +105,9 @@ const vec3 DIM_BLUE   = vec3(0.05, 0.05, 0.25);
             2. CELESTIAL SPHERE
 --------------------------------------------*/
 
-#define CELESTIAL_SPHERE_LATITUDE  40.0 // degrees
-#define CELESTIAL_SPHERE_AZIMUTH   30.0 // degrees
-#define CELESTIAL_SPHERE_SPEED     0.01 // radians per second
+#define CELESTIAL_SPHERE_LATITUDE  40.0  // degrees
+#define CELESTIAL_SPHERE_AZIMUTH   30.0  // degrees
+#define CELESTIAL_SPHERE_SPEED     0.005 // radians per second
 
 /*------------------------------------------
                    3. SKY
@@ -135,8 +147,8 @@ const vec3 DIM_BLUE   = vec3(0.05, 0.05, 0.25);
 
 #define STAR_ATMOSPHERE_DENSITY_COEFF      0.2   // How much atmosphere dims stars at zenith (0.2 = mild)
 #define STAR_SCINTILLATION_SPEED           4.0   // How fast they twinkle
-#define STAR_TWINKLE_STRENGTH              0.3   // How intense the flicker is (0.0 = none, 1.0 = heavy)
-#define STAR_JITTER_STRENGTH               0.2   // Position wobble (in pixels)
+#define STAR_TWINKLE_STRENGTH              0.4   // How intense the flicker is (0.0 = none, 1.0 = heavy)
+#define STAR_JITTER_STRENGTH               0.3   // Position wobble (in pixels)
 
 #define STAR_UNRESOLVED_GRID_SCALE         2500.0  // Higher = smaller patches (more grain, more detail)
 #define STAR_UNRESOLVED_SAMPLES_PER_PATCH  8       // More = smoother + brighter (cost is tiny)
@@ -150,12 +162,39 @@ const vec3 DIM_BLUE   = vec3(0.05, 0.05, 0.25);
                 5. Milky Way
 --------------------------------------------*/
 
-#define MILKYWAY_GALACTIC_NORTH   normalize(vec3(0.25, 0.85, 0.46))   // to define the orientation of the galactic plane
-#define MILKYWAY_CELESTIAL_CENTER normalize(vec3(-0.90, 0.05, -0.43)) // will be changed to project onto the galactic plane
+#define MILKYWAY_GALACTIC_NORTH                 normalize(vec3(0.25, 0.85, 0.46))   // to define the orientation of the galactic plane
+#define MILKYWAY_CELESTIAL_CENTER               normalize(vec3(-0.90, 0.05, -0.43)) // will be changed to project onto the galactic plane (where 0 degrees is)
+// For testing, to center the galaxy on the screen
+//#define MILKYWAY_GALACTIC_NORTH                   AXIS_UP
+//#define MILKYWAY_CELESTIAL_CENTER                 AXIS_FORWARD
 
-#define MILKYWAY_MASK_CENTER      vec2(0.50, 0.50)  // (U=longitude, V=latitude)
-#define MILKYWAY_MASK_SIZE        vec2(0.40, 0.20)  // width, height
-#define MILKYWAY_MASK_FALLOFF     0.02              // UV feather thickness for soft edges
+#define MILKYWAY_MASK_CENTER                      vec2(0.50, 0.50)  // (U=longitude, V=latitude)
+#define MILKYWAY_MASK_HALF_SIZE                   vec2(0.45, 0.20)  // width, height
+#define MILKYWAY_MASK_FALLOFF                     0.02              // UV feather thickness for soft edges
+
+#define MILKYWAY_BULGE_HALF_LENGTH                radians(6.75)
+#define MILKYWAY_BULGE_HALF_THICKNESS             radians(4.0)
+#define MILKYWAY_BULGE_NORMALIZED_FALLOFF         3.0
+#define MILKYWAY_BULGE_SHAPE_POWER                2.7
+#define MILKYWAY_BULGE_COLOR                      vec3(1.00, 0.87, 0.65)
+#define MILKYWAY_BULGE_BRIGHTNESS                 3.0
+
+#define MILKYWAY_DISK_THIN_HALF_LENGTH            radians(19.0)   // controls rounded “endcaps” (≈ half-length scale)
+#define MILKYWAY_DISK_THIN_CENTER_HALF_THICKNESS  radians(0.80)   // ~1.1° full thickness near center (b~1 ridge)
+#define MILKYWAY_DISK_THIN_END_HALF_THICKNESS     radians(0.75)   // gets thinner toward the ends
+#define MILKYWAY_DISK_THIN_COLOR                  vec3(0.98, 0.97, 0.95)
+#define MILKYWAY_DISK_THIN_BRIGHTNESS             0.70
+
+#define MILKYWAY_DISK_THICK_HALF_LENGTH           radians(50.0)  // broader extent for dim isophotes
+#define MILKYWAY_DISK_THICK_HALF_LENGTH_CUTOFF    radians(25.0)  // where it should be basically gone
+#define MILKYWAY_DISK_THICK_CUTOFF_SOFTNESS       radians(100.0) // softness of the cutoff
+#define MILKYWAY_DISK_THICK_CENTER_HALF_THICKNESS radians(5.50)  // ~4–6° full thickness near center (mid isophote)
+#define MILKYWAY_DISK_THICK_END_HALF_THICKNESS    radians(3.50)  // ~2°-ish full thickness near ends
+#define MILKYWAY_DISK_THICK_COLOR                 vec3(0.92, 0.94, 1.00)
+#define MILKYWAY_DISK_THICK_BRIGHTNESS            0.15
+
+#define MILKYWAY_DISK_TOTAL_BRIGHTNESS            0.25
+#define MILKYWAY_CORE_TOTAL_BRIGHTNESS            1.0
 
 //==================================================================
 //                        --- STRUCTURES ---
@@ -203,6 +242,54 @@ struct Star
     vec3  radiance;     // Pre-calculated base energy (white)
 };
 
+struct Bulge
+{
+    vec2 distanceFromCenter;
+    
+    vec2 radii;
+    float shapePower;
+    float falloff;
+    
+    float intensity;
+    float mask;
+    vec3 color;
+    
+    vec3 finalColor;
+};
+
+struct Disk
+{
+    vec2 distanceFromCenter;
+    
+    float halfLength;
+    float halfLengthCutoff;
+    float cutoffSoftness;
+    
+    float centerHalfThickness;
+    float endHalfThickness;
+    
+    float intensity;
+    float mask;
+    vec3 color;
+    
+    vec3 finalColor;
+};
+
+struct Core
+{
+    Bulge bulge;
+    Disk thinDisk;
+    Disk thickDisk;
+    
+    float diskMask;
+    float diskIntensity;
+    vec3 diskColor;
+    
+    float mask;
+    float intensity;
+    vec3 finalColor;
+};
+
 struct MilkyWay
 {
     vec2 uv;
@@ -216,10 +303,14 @@ struct MilkyWay
     vec3 axisV;              // perpendicular to both galactic north and axisU (the plane that axisU and axisV define defines latitude = 0)
     
     vec2 maskCenter;         // (0.5, 0.5) is longitude = 0 (U axis), latitude = 0 (V axis)
-    vec2 maskSize;
+    vec2 maskHalfSize;
     float maskFalloff;
-    
     float mask;
+    vec2 maskUV;
+    
+    Core core;
+    
+    vec3 finalColor;
 };
 
 //==================================================================
@@ -281,6 +372,19 @@ vec2 remap(vec2 value, vec2 old_min, vec2 old_max, vec2 new_min, vec2 new_max)
     return new_min + (value - old_min) * (new_max - new_min) / (old_max - old_min);
 }
 
+float gaussian(float value, float standardDeviation)
+{
+    // Gaussian: exp(-0.5 * (x/sigma)^2)
+    float invSigma = 1.0 / max(EPSILON_4, standardDeviation);
+    float u = value * invSigma;
+    return exp(-0.5 * u * u);
+}
+vec2 gaussian(vec2 value, vec2 standardDeviation)
+{
+    return vec2(gaussian(value.x, standardDeviation.x),
+                gaussian(value.y, standardDeviation.y));
+}
+
 float wrapDistance01(float a, float b)
 {
     // Map to [-0.5, 0.5] so the seam behaves like a torus in U.
@@ -293,6 +397,8 @@ vec3 safeNormalize(vec3 v, vec3 fallback)
     if (len2 < EPSILON_12) return fallback;
     return v * inversesqrt(len2);
 }
+
+float booleanUnion(float a, float b) { return a + b - a*b; }
 
 /*--------------------------------------
         Geometric Transformation
@@ -386,6 +492,33 @@ vec3 hash33(vec3 p3)
     p3 = fract(p3 * vec3(.1031, .1030, .0973));
     p3 += dot(p3, p3.yxz+33.33);
     return fract((p3.xxy + p3.yxx)*p3.zyx);
+}
+
+float valueNoise2D(vec2 p)
+{
+    vec2 i = floor(p);
+    vec2 f = fract(p);
+
+    float a = hash12(i);
+    float b = hash12(i + vec2(1.0, 0.0));
+    float c = hash12(i + vec2(0.0, 1.0));
+    float d = hash12(i + vec2(1.0, 1.0));
+
+    vec2 u = f * f * (3.0 - 2.0 * f);
+
+    return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
+}
+
+float fbm2D(vec2 p)
+{
+    float sum = 0.0;
+    float amp = 0.5;
+
+    sum += amp * valueNoise2D(p); p *= 2.0; amp *= 0.5;
+    sum += amp * valueNoise2D(p); p *= 2.0; amp *= 0.5;
+    sum += amp * valueNoise2D(p);
+
+    return sum / 0.875; // 0.5 + 0.25 + 0.125
 }
 
 /*--------------------------------------
@@ -673,6 +806,203 @@ vec3 getDirFromCubemap(CubeMapFace cubeMapFace)
 }
 
 /*--------------------------------------
+                 Bulge
+----------------------------------------*/
+
+void makeBulge(out Bulge bulge)
+{
+    // 1) Normalize by radii so bulge.radii defines the boundary where shapeDistance == 1.
+    vec2 radii = max(bulge.radii, vec2(EPSILON_4));
+    vec2 q     = abs(bulge.distanceFromCenter) / radii;
+
+    // 2) Superellipse distance: changes footprint shape without changing the boundary.
+    float p = max(bulge.shapePower, 1.0);
+    float shapeDistance = pow(pow(q.x, p) + pow(q.y, p), 1.0 / p);
+
+    // 3) Mask mapping:
+    //    - Outside (shapeDistance >= 1): 0
+    //    - Inside: 1 near center, fades toward the edge based on bulge.edgeSoftness
+    //
+    // bulge.edgeSoftness is in normalized units [0..1] of the radii boundary:
+    // 0.0 = hard edge, 0.2 = fade over the outer 20% of the bulge.
+    float edgeSoftness = MILKYWAY_BULGE_NORMALIZED_FALLOFF;
+
+    // Start fade at (1 - edgeSoftness), end at 1.
+    float fadeStart = 1.0 - edgeSoftness;
+
+    // If edgeSoftness == 0, fadeStart == 1, and smoothstep becomes a hard boundary.
+    float mask = 1.0 - smoothstep(fadeStart, 1.0, shapeDistance);
+
+    // Hard-kill outside, just to be explicit (and avoid any precision weirdness)
+    mask *= step(shapeDistance, 1.0);
+
+    bulge.mask       = saturate(mask) * bulge.intensity;
+    bulge.finalColor = bulge.mask * bulge.color;
+}
+
+
+Bulge initBulge(float horizontalPos, float verticalPos)
+{
+    Bulge bulge;
+    
+    bulge.distanceFromCenter = vec2(horizontalPos, verticalPos);
+
+    bulge.radii      = vec2(MILKYWAY_BULGE_HALF_LENGTH, MILKYWAY_BULGE_HALF_THICKNESS);
+    bulge.shapePower = MILKYWAY_BULGE_SHAPE_POWER;
+
+    bulge.intensity  = MILKYWAY_BULGE_BRIGHTNESS;
+    bulge.mask       = 0.0;
+    bulge.color      = MILKYWAY_BULGE_COLOR;
+
+    bulge.finalColor = BLACK;
+    
+    return bulge;
+}
+
+/*--------------------------------------
+                  Disk
+----------------------------------------*/
+
+void makeDisk(out Disk disk)
+{
+    // Rounded ends: the band fades out horizontally.
+    float horizontalFalloff = gaussian(disk.distanceFromCenter.x, disk.halfLength);
+
+    // As we move away from the center horizontally, transition the band thickness
+    // from a "center thickness" to an "edge thickness" (prevents needle-like tips).
+    
+    // Get how far along we are in either direction [0,1]
+    float horizontalProgress = saturate(disk.distanceFromCenter.x / max(EPSILON_4, disk.halfLength));
+    // Make it a non-linear smooth transition
+    float thicknessBlend     = smoothstep(0.0, 1.0, horizontalProgress);
+    
+    // Get thickness along disk
+    float halfThickness = mix(disk.centerHalfThickness, disk.endHalfThickness, thicknessBlend);
+    halfThickness       = max(halfThickness, EPSILON_4); // hard safety floor
+
+    // Vertical profile: how strongly we stay inside the band.
+    float verticalFalloff = gaussian(disk.distanceFromCenter.y, halfThickness);
+
+    // Optional soft truncation: kills Gaussian tails so it doesn't wrap around.
+    float extentClamp = 1.0 - smoothstep(
+        disk.halfLengthCutoff,
+        disk.halfLengthCutoff + disk.cutoffSoftness,
+        disk.distanceFromCenter.x
+    );
+
+    disk.mask = verticalFalloff * horizontalFalloff * extentClamp * disk.intensity;
+    disk.finalColor = disk.mask * disk.color;
+}
+
+Disk initDisk(vec2 distanceFromCenter,
+              float halfLength,
+              float halfLengthCutoff,
+              float cutoffSoftness,
+              float centerHalfThickness,
+              float endHalfThickness,
+              float maskIntensity,
+              vec3 color)
+{
+    Disk disk;
+    
+    disk.distanceFromCenter = distanceFromCenter;
+    
+    disk.halfLength = halfLength;
+    disk.halfLengthCutoff = halfLengthCutoff;
+    disk.cutoffSoftness = cutoffSoftness;
+    
+    disk.centerHalfThickness = centerHalfThickness;
+    disk.endHalfThickness = endHalfThickness;
+    
+    disk.intensity = maskIntensity;
+    disk.mask = 0.0;
+    disk.color = color;
+    
+    disk.finalColor = BLACK;
+    
+    return disk;
+}
+
+/*--------------------------------------
+                  Core
+----------------------------------------*/
+
+Bulge getBulge(MilkyWay milkyWay)
+{
+    float absLon = abs(milkyWay.longitude);
+    float absLat = abs(milkyWay.latitude);
+    
+    Bulge bulge = initBulge(absLon, absLat);
+    makeBulge(bulge);
+    
+    return bulge;
+}
+
+Disk getThinDisk(MilkyWay milkyWay)
+{
+    float absLon = abs(milkyWay.longitude);
+    float absLat = abs(milkyWay.latitude);
+    
+    Disk thinDisk = initDisk(vec2(absLon, absLat),
+                             MILKYWAY_DISK_THIN_HALF_LENGTH,
+                             radians(180.0), radians(1.0), // no cutoff needed
+                             MILKYWAY_DISK_THIN_CENTER_HALF_THICKNESS,
+                             MILKYWAY_DISK_THIN_END_HALF_THICKNESS,
+                             MILKYWAY_DISK_THIN_BRIGHTNESS,
+                             MILKYWAY_DISK_THIN_COLOR);
+    
+    makeDisk(thinDisk);
+    
+    return thinDisk;
+}
+
+Disk getThickDisk(MilkyWay milkyWay)
+{
+    float absLon = abs(milkyWay.longitude);
+    float absLat = abs(milkyWay.latitude);
+    
+    Disk thickDisk = initDisk(vec2(absLon, absLat),
+                              MILKYWAY_DISK_THICK_HALF_LENGTH,
+                              MILKYWAY_DISK_THICK_HALF_LENGTH_CUTOFF,
+                              MILKYWAY_DISK_THICK_CUTOFF_SOFTNESS,
+                              MILKYWAY_DISK_THICK_CENTER_HALF_THICKNESS,
+                              MILKYWAY_DISK_THICK_END_HALF_THICKNESS,
+                              MILKYWAY_DISK_THICK_BRIGHTNESS,
+                              MILKYWAY_DISK_THICK_COLOR);
+    
+    makeDisk(thickDisk);
+    
+    return thickDisk;
+}
+
+Core initCore(MilkyWay milkyWay)
+{
+    Core core;
+    
+    // Disk field in galactic coordinates.
+    // - Uses mw.longitude in [-PI..PI] from atan()
+    // - Uses mw.latitude  in [-PI/2..PI/2] from asin()
+    //
+    // diskField is a unitless brightness mask (not HDR yet).
+    // HDR = diskField * brightness * color (you already do that).
+    
+    core.bulge     = getBulge(milkyWay);
+    core.thinDisk  = getThinDisk(milkyWay);
+    core.thickDisk = getThickDisk(milkyWay);
+    
+    core.diskMask      = saturate(core.thinDisk.mask + core.thickDisk.mask);
+    core.diskIntensity = MILKYWAY_DISK_TOTAL_BRIGHTNESS;
+    core.diskColor     = (core.thinDisk.finalColor + core.thickDisk.finalColor) * core.diskIntensity;
+    
+    core.mask      = booleanUnion(core.diskMask, core.bulge.mask);
+    core.intensity = MILKYWAY_CORE_TOTAL_BRIGHTNESS;
+    
+    core.finalColor = core.intensity * (core.diskColor + core.bulge.finalColor);
+    
+    return core;
+}
+
+/*--------------------------------------
                 MilkyWay
 ----------------------------------------*/
 
@@ -685,10 +1015,10 @@ MilkyWay setMilkyWayUV(out MilkyWay milkyWay, vec3 dirCelestial)
     float y = dot(dirCelestial, milkyWay.axisV);
     float lon = atan(y, x);
 
-    milkyWay.latitude = lat;
+    milkyWay.latitude  = lat;
     milkyWay.longitude = lon;
-    milkyWay.uv  = vec2(lon / TAU + 0.5, lat / PI + 0.5);
-
+    milkyWay.uv        = vec2(lon / TAU + 0.5, lat / PI + 0.5);
+    
     return milkyWay;
 }
 
@@ -697,38 +1027,56 @@ void setMilkyWayMask(out MilkyWay milkyWay)
     float du = abs(wrapDistance01(milkyWay.uv.x, milkyWay.maskCenter.x));
     float dv = abs(milkyWay.uv.y - milkyWay.maskCenter.y);
 
-    vec2 d = vec2(du, dv) - milkyWay.maskSize / 2.0; // <= 0 inside per-axis
+    vec2 d = vec2(du, dv) - milkyWay.maskHalfSize; // <= 0 inside per-axis
     float outside = max(d.x, d.y);                   // <= 0 inside rect, >0 outside
 
-    // 1.0 inside, feather to 0.0 outside over [0, milkyWay.rectEdgeFeather]
+    // 1.0 inside, feather to 0.0 outside over [0, milkyWay.maskFalloff]
     milkyWay.mask = 1.0 - smoothstep(0.0, milkyWay.maskFalloff, outside);
+    
+    float mUVx = wrapDistance01(milkyWay.uv.x, milkyWay.maskCenter.x) / max(EPSILON_4, milkyWay.maskHalfSize.x);
+    float mUVy = (milkyWay.uv.y - milkyWay.maskCenter.y)              / max(EPSILON_4, milkyWay.maskHalfSize.y);
+    milkyWay.maskUV = vec2(mUVx, mUVy);
 }
 
 MilkyWay initMilkyWay(CelestialSphere celestialSphere)
 {
     MilkyWay milkyWay;
     
-    // 1) Define galactic north (normal of the galactic plane) and  (both in celestial space)
-    milkyWay.galacticNorth    = safeNormalize(MILKYWAY_GALACTIC_NORTH, AXIS_UP);
-    milkyWay.celestialCenter = safeNormalize(MILKYWAY_CELESTIAL_CENTER, AXIS_FORWARD);
+    // Define galactic frame
+    {
+        // 1) Define galactic north (normal of the galactic plane) and  (both in celestial space)
+        milkyWay.galacticNorth    = safeNormalize(MILKYWAY_GALACTIC_NORTH, AXIS_UP);
+        milkyWay.celestialCenter = safeNormalize(MILKYWAY_CELESTIAL_CENTER, AXIS_FORWARD);
 
-    // 2) Force center direction to lie in the plane (project out any normal component)
-    vec3 centerInPlane = milkyWay.celestialCenter - milkyWay.galacticNorth * dot(milkyWay.celestialCenter, milkyWay.galacticNorth);
-    milkyWay.axisU = safeNormalize(centerInPlane, AXIS_FORWARD);
+        // 2) Force center direction to lie in the plane (project out any normal component)
+        vec3 centerInPlane = milkyWay.celestialCenter - milkyWay.galacticNorth * dot(milkyWay.celestialCenter, milkyWay.galacticNorth);
+        milkyWay.axisU = safeNormalize(centerInPlane, AXIS_FORWARD);
 
-    // 3) Complete an orthonormal basis for the plane
-    milkyWay.axisV = safeNormalize(cross(milkyWay.galacticNorth, milkyWay.axisU), AXIS_RIGHT);
+        // 3) Complete an orthonormal basis for the plane
+        milkyWay.axisV = safeNormalize(cross(milkyWay.galacticNorth, milkyWay.axisU), AXIS_RIGHT);
 
-    // 4) Get milky way coordinates on the celestial sphere
-    setMilkyWayUV(milkyWay, celestialSphere.rotatedRay);
+        // 4) Get milky way coordinates on the celestial sphere
+        setMilkyWayUV(milkyWay, celestialSphere.rotatedRay);
+    }
+    // Define galactic mask
+    {
+        // 5) Rectangle gate parameters (galactic UV space)
+        milkyWay.maskCenter  = MILKYWAY_MASK_CENTER;
+        milkyWay.maskHalfSize    = MILKYWAY_MASK_HALF_SIZE;
+        milkyWay.maskFalloff = MILKYWAY_MASK_FALLOFF;
     
-    // 5) Rectangle gate parameters (galactic UV space)
-    milkyWay.maskCenter  = MILKYWAY_MASK_CENTER;
-    milkyWay.maskSize    = MILKYWAY_MASK_SIZE;
-    milkyWay.maskFalloff = MILKYWAY_MASK_FALLOFF;
-    
-    // 6) Gate for rendering
-    setMilkyWayMask(milkyWay);
+        // 6) Gate for rendering
+        setMilkyWayMask(milkyWay);
+    }
+    // Define galactic core
+    {
+        milkyWay.core = initCore(milkyWay);
+    }
+    // Final compositing
+    {
+        // Temporary placeholder until all previous substeps in M7 is complete
+        milkyWay.finalColor = milkyWay.mask * milkyWay.core.finalColor;
+    }
     
     return milkyWay;
 }

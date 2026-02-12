@@ -26,10 +26,7 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord)
     CelestialSphere celestialSphere = initCelestialSphere(camera, time);
 
     // 1) Milky Way frame + galactic UV for this view ray
-    MilkyWay mw = initMilkyWay(celestialSphere);
-
-    // M7.2 output policy:
-    // - Normal render stays black until disk/bulge are implemented (M7.3+).
-
-    fragColor = toFrag(mw.mask);
+    MilkyWay milkyWay = initMilkyWay(celestialSphere);
+    
+    fragColor = toFrag(milkyWay.finalColor);
 }

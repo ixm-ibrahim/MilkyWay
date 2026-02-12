@@ -164,7 +164,7 @@ Stop here if you want M7 to remain strictly "core geometry + infrastructure".
 M7.6 — Infrastructure scaffolding for later M8+ layers (NO NEW VISUAL DETAIL YET)
 ---------------------------------------------------------------------------------
 Goal:
-  - Prepare hooks for nebulae/clouds/dust without adding complexity now.
+  - Prepare hooks/structures for nebulae/clouds/dust/great rift/etc. without adding complexity now.
 Tasks (Common.glsl / Buffer C):
   [ ] Define placeholders (neutral defaults):
       - mottleFactor = 1.0
