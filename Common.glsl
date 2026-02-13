@@ -173,11 +173,11 @@ const vec3 DIM_BLUE   = vec3(0.05, 0.05, 0.25);
 #define MILKYWAY_MASK_FALLOFF                     0.02              // UV feather thickness for soft edges
 
 #define MILKYWAY_BULGE_HALF_LENGTH                radians(6.75)
-#define MILKYWAY_BULGE_HALF_THICKNESS             radians(4.0)
-#define MILKYWAY_BULGE_NORMALIZED_FALLOFF         3.0
+#define MILKYWAY_BULGE_HALF_THICKNESS             radians(4.25)
+#define MILKYWAY_BULGE_NORMALIZED_FALLOFF         1.8
 #define MILKYWAY_BULGE_SHAPE_POWER                2.7
 #define MILKYWAY_BULGE_COLOR                      vec3(1.00, 0.87, 0.65)
-#define MILKYWAY_BULGE_BRIGHTNESS                 3.0
+#define MILKYWAY_BULGE_BRIGHTNESS                 1.8
 
 #define MILKYWAY_DISK_THIN_HALF_LENGTH            radians(19.0)   // controls rounded “endcaps” (≈ half-length scale)
 #define MILKYWAY_DISK_THIN_CENTER_HALF_THICKNESS  radians(0.80)   // ~1.1° full thickness near center (b~1 ridge)

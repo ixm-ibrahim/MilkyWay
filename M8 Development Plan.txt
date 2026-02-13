@@ -1,0 +1,179 @@
+========================================
+M8 DEVELOPMENT PLAN — MILKY WAY REALISM
+(Buffer C = Milky Way)
+========================================
+
+GOAL
+- Make the Milky Way look optically realistic (not just a glowing core):
+  - Add the Great Rift / Dark Rift (dust lanes)
+  - Add patchy star-cloud structure along the band
+  - Add and/or verify subtle color variation (core warmer, disk more neutral/cool, dust desaturates)
+  - Optional: faint emission/nebula hints (kept subtle for “naked-eye” look)
+
+RULES
+- Everything is evaluated in galactic space (mw.uv / mw.latitude / mw.longitude), NOT screen space.
+- Each substep must be independently testable with a debug output mode.
+- Prefer multiplicative attenuation for dust (extinction-like) over "painting brown."
+- Keep detail frequencies low enough to avoid shimmer; clamp ranges to avoid extremes.
+
+----------------------------------------
+8.1  DEBUG / ISOLATION MODES (MUST-HAVE FIRST)
+----------------------------------------
+Purpose:
+- Make each M8 layer visible in isolation so tuning is safe and incremental.
+
+Implement:
+- Add debug toggles (comment-controlled or #define):
+  - DEBUG_MW_SHOW_BASE_BAND      -> shows current MW band/core only
+  - DEBUG_MW_SHOW_MOTTLE         -> shows star-cloud mottling mask only (grayscale)
+  - DEBUG_MW_SHOW_DUST           -> shows dust lane / Great Rift mask only (grayscale)
+  - DEBUG_MW_SHOW_COLOR_WEIGHTS  -> shows color blend weights (false color)
+  - DEBUG_MW_SHOW_FINAL_MW       -> shows MW only (no stars/background if helpful)
+
+Verification:
+- Pan/rotate camera: debug masks remain locked to the sky (no crawling).
+- Toggle each view: exactly one layer is visible, cleanly.
+
+Hold Point:
+- Do not proceed until you can isolate every layer quickly.
+
+----------------------------------------
+8.2  STABLE DETAIL COORDS (FOUNDATION FOR ALL STRUCTURE)
+----------------------------------------
+Purpose:
+- Establish a single “detailUV” space used by mottling + dust + optional nebula so everything aligns.
+
+Implement:
+- Define detail coordinate(s) in galactic UV:
+  - detailUV = (mw.uv - center) * scale   (wrap-safe approach if you already handle seam)
+  - optional: tiny low-frequency warp to break procedural look (VERY small)
+
+Verification:
+- Debug output: display detailUV as gradient/false-color.
+- Confirm stability while panning, and seam behavior matches expectations.
+
+Hold Point:
+- If seam artifacts or instability appear, fix mapping before adding any noise layers.
+
+----------------------------------------
+8.3  GREAT RIFT / DUST LANES (BIGGEST REALISM WIN)
+----------------------------------------
+Purpose:
+- Carve the Milky Way band with long, coherent dark lanes (Great Rift) so it stops reading as a smooth glow.
+
+Scientifically accurate concept:
+- Dust causes extinction along the line of sight (reduces observed starlight).
+
+Cheap/fast approach:
+- Create a procedural “dust optical depth” mask in galactic coords:
+  - Strong near the galactic plane (planeMask)
+  - Stretched along longitude (anisotropic noise: u stretched >> v)
+  - Coherent large features + smaller substructure (2-scale fbm)
+  - Optional: a second offset lane to create “split” segments (rift feel)
+
+Substeps:
+- 8.3a Dust lane v1: single stretched noise band near plane (readable as lane)
+- 8.3b Rift split: add secondary offset lane + blend (creates Great Rift look)
+- 8.3c Warp polish: tiny warp to dust sampling coords to avoid “procedural stripes”
+
+Application model:
+- Apply dust as multiplicative attenuation:
+  MW *= (1 - dustStrength * dustMask)
+  (or exponential style if you already have it: MW *= exp(-k * dustMask))
+
+Verification:
+- DEBUG_MW_SHOW_DUST: should show long, ragged dark structures near the plane.
+- DEBUG_MW_SHOW_FINAL_MW: Great Rift should be readable even before bloom/post.
+
+Hold Point:
+- Stop once the Great Rift is clearly visible and not “pepper noise.”
+
+----------------------------------------
+8.4  STAR-CLOUD MOTTLE (PATCHINESS / TEXTURE ALONG THE BAND)
+----------------------------------------
+Purpose:
+- Make the MW band look like dense star clouds (patchy brightness), not a uniform fog.
+
+Scientifically accurate concept:
+- Integrated density variations + unresolved star distribution variations.
+
+Cheap/fast approach:
+- Create a subtle multiplicative brightness modulator:
+  mottleMultiplier in ~[0.7..1.3] (tune range)
+- Use 1–2 octave fbm in detailUV (low frequencies only), optionally lat-biased.
+
+Substeps:
+- 8.4a Coarse mottling: single low-freq fbm -> remap -> multiplier
+- 8.4b Two-scale mottling: multiply/lerp low + mid freq fbm, clamp to safe range
+
+Verification:
+- DEBUG_MW_SHOW_MOTTLE: should look like large cloudy patches, not tiny static.
+- In final MW: mottling should enhance realism but not dominate.
+
+Hold Point:
+- If it looks like TV noise or sparkles: frequency too high or mapping unstable.
+
+----------------------------------------
+8.5  COLOR REALISM BLEND (CORE WARMTH + DISK NEUTRALITY + DUST DESAT)
+----------------------------------------
+Purpose:
+- Achieve plausible naked-eye color impression:
+  - Core/bulge slightly warmer/yellower
+  - Disk slightly neutral/cool
+  - Dust lanes darken + reduce saturation (less “color paint,” more “light removed”)
+
+Implement:
+- Define 3 color anchors (coreColor, diskColor, dustEffectColor or desat factor)
+- Blend using existing masks:
+  - coreMask (already have from M7)
+  - disk/band mask (your MW gate)
+  - dustMask (from 8.3)
+  - optionally mottling influences brightness only, not hue (default)
+
+Verification:
+- DEBUG_MW_SHOW_COLOR_WEIGHTS: confirm weights are where expected.
+- Final MW: core is warmer than disk, but overall is subtle (not neon).
+
+Hold Point:
+- If it starts looking like an astrophoto, reduce saturation and/or emission.
+
+----------------------------------------
+8.6  OPTIONAL: FAINT NEBULA / EMISSION HINTS (ONLY IF NEEDED)
+----------------------------------------
+Purpose:
+- Add tiny localized bright patches that suggest real structure without turning into long-exposure photography.
+
+Scientifically accurate concept:
+- Emission regions (e.g., H-alpha) exist but are not strongly saturated to naked eye.
+
+Cheap/fast approach:
+- Add 2–5 deterministic gaussian blobs in galactic UV, noise-modulated, heavily clamped.
+- Tint extremely subtly (warm/pink), but keep intensity very low.
+
+Substeps:
+- 8.6a One blob calibration near core region only
+- 8.6b Add a few more blobs; clamp total contribution hard
+
+Verification:
+- DEBUG_MW_SHOW_NEBULA (if you add it): mask should be localized, not covering the band.
+- Final MW: barely noticeable unless you look for it.
+
+Hold Point:
+- If it’s obvious at a glance, it’s too strong for this project’s “optical” goal.
+
+----------------------------------------
+8.7  INTEGRATION + REGRESSION CHECKS (DON’T BREAK PIPELINE)
+----------------------------------------
+Purpose:
+- Ensure M8 plays nicely with A/B/D and your existing exposure/tonemap/bloom.
+
+Checks:
+- MW-only render: structure reads (rift + mottling) even without bloom.
+- Stars-only render (disable MW): stars unchanged from M9/M7 pipeline.
+- Camera pan/rotation: no shimmer/crawling in MW detail.
+- HDR sanity: avoid early clamping; clamp only in post as designed.
+
+Exit Criteria:
+- Milky Way reads as: band + structured dust lanes + subtle patchiness + plausible color,
+  and no longer as “just a glowing core object in the sky.”
+========================================
