@@ -204,6 +204,35 @@ void mainImage( out vec4 fragColor, in vec2 fragCoord )
         if (DEBUG_USE_TEST_COLOR) fragColor = toFrag(milkyWay.core.mask);
         return;
     }
+    if (DEBUG_MODE == DEBUG_MILKYWAY_DETAIL_UV)
+    {
+        // Visualize detailUV in a stable way.
+        // Use sine stripes (not fract) to make seam behavior obvious without harsh jumps.
+        vec2 stripes = 0.5 + 0.5 * sin(milkyWay.detailUV * TAU);
+        vec3 c = vec3(stripes.x, stripes.y, 0.0);
+
+        // Only show inside the MW gate to keep the image readable.
+        if (DEBUG_USE_TEST_COLOR) fragColor = toFrag(milkyWay.mask * c);
+        return;
+    }
+    if (DEBUG_MODE == DEBUG_MILKYWAY_DUST_DENSITY)
+    {
+        // Grayscale debug: dust coverage (0 = none, 1 = max)
+        if (DEBUG_USE_TEST_COLOR) fragColor += toFrag(debugColorRamp(milkyWay.dustDensity));
+        return;
+    }
+    if (DEBUG_MODE == DEBUG_MILKYWAY_MOTTLE_MASK)
+    {
+        // Grayscale debug (will be non-zero starting in 8.4).
+        //if (DEBUG_USE_TEST_COLOR) fragColor = toFrag(debugColorRamp(milkyWay.mottleMask));
+        //return;
+    }
+    if (DEBUG_MODE == DEBUG_MILKYWAY_COLOR_WEIGHTS)
+    {
+        // False color: R=disk weight, G=bulge weight, B=reserved (dust later).
+        //if (DEBUG_USE_TEST_COLOR) fragColor = toFrag(saturate(milkyWay.colorWeights));
+        //return;
+    }
 #endif
     
     // Output final result

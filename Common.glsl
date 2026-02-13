@@ -48,43 +48,52 @@ const vec3 DIM_BLUE   = vec3(0.05, 0.05, 0.25);
 //==================================================================
 
 /*------------------------------------------
-                  0. DEBUG
+                   DEBUG
 --------------------------------------------*/
 
-#define SHOW_DEBUG                     1
+#define SHOW_DEBUG                      1
 
-#define ENABLE_BUFFER_A                true  // background
-#define ENABLE_BUFFER_B                true  // stars
-#define ENABLE_BUFFER_C                true  // milky way
-#define ENABLE_BUFFER_D                true  // post-processing
+#define ENABLE_BUFFER_A                 true  // background
+#define ENABLE_BUFFER_B                 true  // stars
+#define ENABLE_BUFFER_C                 true  // milky way
+#define ENABLE_BUFFER_D                 true  // post-processing
 
-#define DEBUG_OFF                      0
-#define DEBUG_VIEW_RAY                 1
-#define DEBUG_CAMERA_PAN               2
-#define DEBUG_PIXEL_SCALE              3
-#define DEBUG_CELESTIAL_ROTATION       4
-#define DEBUG_STAR_GRID                5
-#define DEBUG_STAR_ID                  6
-#define DEBUG_STAR_LUMINANCE           7
-#define DEBUG_MILKYWAY_GALACTIC_UV     8
-#define DEBUG_MILKYWAY_MASK            9
-#define DEBUG_MILKYWAY_COORDS          10
-#define DEBUG_MILKYWAY_DISK            11
-#define DEBUG_MILKYWAY_BULGE           12
-#define DEBUG_MILKYWAY_CORE            13
+#define DEBUG_OFF                       0
+#define DEBUG_VIEW_RAY                  1
+#define DEBUG_CAMERA_PAN                2
+#define DEBUG_PIXEL_SCALE               3
+#define DEBUG_CELESTIAL_ROTATION        4
+#define DEBUG_STAR_GRID                 5
+#define DEBUG_STAR_ID                   6
+#define DEBUG_STAR_LUMINANCE            7
+#define DEBUG_MILKYWAY_GALACTIC_UV      8
+#define DEBUG_MILKYWAY_MASK             9
+#define DEBUG_MILKYWAY_COORDS           10
+#define DEBUG_MILKYWAY_DISK             11
+#define DEBUG_MILKYWAY_BULGE            12
+#define DEBUG_MILKYWAY_CORE             13
+#define DEBUG_MILKYWAY_DETAIL_UV        14
+#define DEBUG_MILKYWAY_DUST_DENSITY     15
+#define DEBUG_MILKYWAY_MOTTLE_MASK      16
+#define DEBUG_MILKYWAY_COLOR_WEIGHTS    17
 
-#define DEBUG_MODE                     DEBUG_OFF
-#define DEBUG_USE_TEST_COLOR           true
-#define DEBUG_ADD_CAMERA_PAN           1
-#define DEBUG_DISABLE_CYCLE            0
-#define DEBUG_MILKYWAY_COORDS_GRID     vec2(10.0, 10.0) // degrees
+#define DEBUG_MODE                      DEBUG_MILKYWAY_DUST_DENSITY
+#define DEBUG_USE_TEST_COLOR            true
+#define DEBUG_ADD_CAMERA_PAN            1
+#define DEBUG_DISABLE_CYCLE             0
+#define DEBUG_MILKYWAY_COORDS_GRID      vec2(10.0, 10.0) // degrees
 
-#define DEBUG_ENABLE_FREEZE_TIME       false
-#define DEBUG_FROZEN_TIME_SECONDS      0.1
-#define DEBUG_TIME_SPEED_SCALE         1.0
+#define DEBUG_ENABLE_FREEZE_TIME        false
+#define DEBUG_FROZEN_TIME_SECONDS       0.1
+#define DEBUG_TIME_SPEED_SCALE          1.0
 
-#define ERROR_COLOR                    MAGENTA
+#define ERROR_COLOR                     MAGENTA
 
+/*------------------------------------------
+               0. PERFORMACE
+--------------------------------------------*/
+
+#define FBM_MAX_OCTAVES 7
 
 /*------------------------------------------
                  1. CAMERA
@@ -162,22 +171,22 @@ const vec3 DIM_BLUE   = vec3(0.05, 0.05, 0.25);
                 5. Milky Way
 --------------------------------------------*/
 
-#define MILKYWAY_GALACTIC_NORTH                 normalize(vec3(0.25, 0.85, 0.46))   // to define the orientation of the galactic plane
-#define MILKYWAY_CELESTIAL_CENTER               normalize(vec3(-0.90, 0.05, -0.43)) // will be changed to project onto the galactic plane (where 0 degrees is)
+//#define MILKYWAY_GALACTIC_NORTH                 normalize(vec3(0.25, 0.85, 0.46))   // to define the orientation of the galactic plane
+//#define MILKYWAY_CELESTIAL_CENTER               normalize(vec3(-0.90, 0.05, -0.43)) // will be changed to project onto the galactic plane (where 0 degrees is)
 // For testing, to center the galaxy on the screen
-//#define MILKYWAY_GALACTIC_NORTH                   AXIS_UP
-//#define MILKYWAY_CELESTIAL_CENTER                 AXIS_FORWARD
+#define MILKYWAY_GALACTIC_NORTH                   AXIS_UP
+#define MILKYWAY_CELESTIAL_CENTER                 AXIS_FORWARD
 
 #define MILKYWAY_MASK_CENTER                      vec2(0.50, 0.50)  // (U=longitude, V=latitude)
 #define MILKYWAY_MASK_HALF_SIZE                   vec2(0.45, 0.20)  // width, height
 #define MILKYWAY_MASK_FALLOFF                     0.02              // UV feather thickness for soft edges
 
 #define MILKYWAY_BULGE_HALF_LENGTH                radians(6.75)
-#define MILKYWAY_BULGE_HALF_THICKNESS             radians(4.0)
-#define MILKYWAY_BULGE_NORMALIZED_FALLOFF         3.0
+#define MILKYWAY_BULGE_HALF_THICKNESS             radians(4.25)
+#define MILKYWAY_BULGE_NORMALIZED_FALLOFF         1.8
 #define MILKYWAY_BULGE_SHAPE_POWER                2.7
 #define MILKYWAY_BULGE_COLOR                      vec3(1.00, 0.87, 0.65)
-#define MILKYWAY_BULGE_BRIGHTNESS                 3.0
+#define MILKYWAY_BULGE_BRIGHTNESS                 1.8
 
 #define MILKYWAY_DISK_THIN_HALF_LENGTH            radians(19.0)   // controls rounded “endcaps” (≈ half-length scale)
 #define MILKYWAY_DISK_THIN_CENTER_HALF_THICKNESS  radians(0.80)   // ~1.1° full thickness near center (b~1 ridge)
@@ -196,9 +205,42 @@ const vec3 DIM_BLUE   = vec3(0.05, 0.05, 0.25);
 #define MILKYWAY_DISK_TOTAL_BRIGHTNESS            0.25
 #define MILKYWAY_CORE_TOTAL_BRIGHTNESS            1.0
 
+#define MILKYWAY_DETAIL_UV_SCALE                  vec2(6.0, 2.5)
+#define MILKYWAY_DETAIL_UV_WARP_INTENSITY         0.03
+#define MILKYWAY_DETAIL_UV_WARP_1_FBM_PARAMS      FBM_Params(CLOUDS, 3, 0.5, 2.0, vec2(11.3, 7.1), vec2(0.65))
+#define MILKYWAY_DETAIL_UV_WARP_2_FBM_PARAMS      FBM_Params(CLOUDS, 3, 0.5, 2.0, vec2(30.5, 10.5), vec2(0.65))
+
+#define MILKYWAY_DUST_PLANE_HALF_THICKNESS        radians(5.0)
+#define MILKYWAY_DUST_ANISOTROPIC_SCALE           vec2(2.0, 8.0)
+#define MILKYWAY_DUST_CORE_BIAS                   0.1
+#define MILKYWAY_DUST_GALACTIC_PLANE_BIAS         0.2
+#define MILKYWAY_DUST_BIG_FBM_PARAMS              FBM_Params(CLOUDS, 4, 0.5, 2.0, vec2(2.1, 1.6), vec2(0.45))
+#define MILKYWAY_DUST_SMALL_FBM_PARAMS            FBM_Params(CLOUDS, 3, 0.5, 2.0, vec2(3.5, 2.1), vec2(1.50))
+#define MILKYWAY_DUST_SMALL_EMPHASIS              0.35
+#define MILKYWAY_DUST_CUTOFF                      0.81
+#define MILKYWAY_DUST_EDGE_SOFTNESS               0.24
+
+//==================================================================
+//                       --- ENUMERATIONS ---
+//==================================================================
+
+#define FBM_TYPE int
+#define CLOUDS   1
+#define WISPS    2
+
 //==================================================================
 //                        --- STRUCTURES ---
 //==================================================================
+
+struct FBM_Params
+{
+    FBM_TYPE type;
+    int      octaves;     // number of octaves (<= FBM_MAX_OCTAVES)
+    float    gain;        // amplitude falloff per octave
+    float    lacunarity;  // frequency growth per octave
+    vec2     shift;       // domain shift per octave
+    vec2     zoom;        // domain scale
+};
 
 struct Orientation
 {
@@ -309,6 +351,11 @@ struct MilkyWay
     vec2 maskUV;
     
     Core core;
+    
+    vec2 detailUV;
+    
+    float dustMask;
+    float dustDensity;
     
     vec3 finalColor;
 };
@@ -494,7 +541,7 @@ vec3 hash33(vec3 p3)
     return fract((p3.xxy + p3.yxx)*p3.zyx);
 }
 
-float valueNoise2D(vec2 p)
+float valueNoise(vec2 p)
 {
     vec2 i = floor(p);
     vec2 f = fract(p);
@@ -509,17 +556,33 @@ float valueNoise2D(vec2 p)
     return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
 }
 
-float fbm2D(vec2 p)
+float fbm(vec2 uv, FBM_Params params)
 {
-    float sum = 0.0;
-    float amp = 0.5;
+    float total = 0.0;
+    float amplitude = 1.0;
+    float max_amplitude = 0.0;
+    
+    uv *= params.zoom;
 
-    sum += amp * valueNoise2D(p); p *= 2.0; amp *= 0.5;
-    sum += amp * valueNoise2D(p); p *= 2.0; amp *= 0.5;
-    sum += amp * valueNoise2D(p);
-
-    return sum / 0.875; // 0.5 + 0.25 + 0.125
+    // Fixed upper bound; compiler can unroll
+    for (int i = 0; i < FBM_MAX_OCTAVES; ++i)
+    {
+        if (i >= params.octaves) break;
+        
+        float noise = 0.0;
+        
+        if (params.type == CLOUDS) noise = valueNoise(uv + params.shift);
+        if (params.type == WISPS)  noise = valueNoise(uv + params.shift);
+        
+        total         += noise * amplitude;
+        max_amplitude += amplitude;
+        uv            *= params.lacunarity;
+        amplitude     *= params.gain;
+    }
+    
+    return total / max_amplitude;
 }
+
 
 /*--------------------------------------
             Common Utilities
@@ -1038,6 +1101,70 @@ void setMilkyWayMask(out MilkyWay milkyWay)
     milkyWay.maskUV = vec2(mUVx, mUVy);
 }
 
+void setMilkyWayDetailUV(out MilkyWay milkyWay)
+{
+    // Start from maskUV:
+    // - already centered on the MW gate
+    // - already seam-safe in U due to wrapDistance01 usage in setMilkyWayMask()
+    vec2 detailUV = milkyWay.maskUV;
+
+    // Scale controls the "feature size" used by dust/mottle later.
+    detailUV *= MILKYWAY_DETAIL_UV_SCALE;
+
+    // Optional tiny warp to avoid overly procedural straight patterns.
+    // Uses existing fbm2D/valueNoise infrastructure (cheap + stable).
+    float w1 = fbm(detailUV, MILKYWAY_DETAIL_UV_WARP_1_FBM_PARAMS);
+    float w2 = fbm(detailUV, MILKYWAY_DETAIL_UV_WARP_2_FBM_PARAMS);
+
+    vec2 warp = vec2(w1, w2) - 0.5;
+
+    detailUV += warp * MILKYWAY_DETAIL_UV_WARP_INTENSITY;
+
+    milkyWay.detailUV = detailUV;
+}
+
+void setDustMask(out MilkyWay milkyWay)
+{
+    // lat = 0 at the plane. We want dust strongest near lat=0, fading away.
+    float lat = abs(milkyWay.latitude);
+
+    // Gaussian-ish falloff in radians:
+    float sigma = max(EPSILON_4, MILKYWAY_DUST_PLANE_HALF_THICKNESS);
+    float x = lat / sigma;
+
+    // exp(-x^2) gives a smooth "band" around the plane.
+    milkyWay.dustMask = exp(-x * x);
+}
+
+void setDustDensity(out MilkyWay milkyWay)
+{
+    // Stretched sampling coords: long along U, detailed across V.
+    vec2 p = milkyWay.detailUV * MILKYWAY_DUST_ANISOTROPIC_SCALE;
+
+    // 2-scale fbm:
+    float nBig   = fbm(p, MILKYWAY_DUST_BIG_FBM_PARAMS);
+    float nSmall = fbm(p, MILKYWAY_DUST_SMALL_FBM_PARAMS);
+
+    // Combine: big shapes define lane; small adds raggedness.
+    float n = mix(nBig, nSmall, MILKYWAY_DUST_SMALL_EMPHASIS);
+    
+    // We want higher values the closer we are to the core and galactic plane (represented by dustMask)
+    n = saturate(n +
+                 MILKYWAY_DUST_CORE_BIAS * milkyWay.core.mask +
+                 MILKYWAY_DUST_GALACTIC_PLANE_BIAS * milkyWay.dustMask);
+
+    // Shape into lane-like coverage:
+    // push values below cutoff to 0; soften edge so it’s not binary.
+    float lane = smoothstep(
+        MILKYWAY_DUST_CUTOFF - MILKYWAY_DUST_EDGE_SOFTNESS,
+        MILKYWAY_DUST_CUTOFF + MILKYWAY_DUST_EDGE_SOFTNESS,
+        n
+    );
+
+    // Dust only matters inside the MW gate and near the plane.
+    milkyWay.dustDensity = milkyWay.mask * milkyWay.dustMask * lane;
+}
+
 MilkyWay initMilkyWay(CelestialSphere celestialSphere)
 {
     MilkyWay milkyWay;
@@ -1068,9 +1195,14 @@ MilkyWay initMilkyWay(CelestialSphere celestialSphere)
         // 6) Gate for rendering
         setMilkyWayMask(milkyWay);
     }
-    // Define galactic core
+    // Define milky way
     {
         milkyWay.core = initCore(milkyWay);
+        
+        setMilkyWayDetailUV(milkyWay);
+        
+        setDustMask(milkyWay);
+        setDustDensity(milkyWay);
     }
     // Final compositing
     {
